@@ -19,8 +19,9 @@ from agents.research_agent import run_research_agent
 from agents.scorer_agent import run_scorer_agent
 from agents.cam_generator import run_cam_generator
 from agents.rcu_agent import run_rcu_verification_agent
-from tools.cibil_api import fetch_cibil_report
-from tools.mca_scraper import fetch_mca_report
+from tools.cibil_api import fetch_cibil_report, get_cibil_score_enhanced
+from tools.mca_scraper import fetch_mca_report, run_mca_scraper
+from tools.document_forgery_detector import screen_documents_batch
 from tools.for_calculator import calculate_for, LoanDetails
 from tools.working_capital import analyze_working_capital
 from tools.nts_analyzer import analyze_sector
@@ -157,6 +158,39 @@ async def _research_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "research": "DONE",
     }
     return updates
+
+
+async def _forgery_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Node 0: Forgery screening (Gateway)"""
+    logs: List[Dict[str, Any]] = [_log("FORGERY_CHECK", "Running document forgery pre-screening...")]
+    docs = state.get("documents", [])
+    
+    if not docs:
+        logs.append(_log("FORGERY_CHECK", "No documents to screen."))
+        return {"logs": logs}
+        
+    results = await screen_documents_batch(docs)
+    logs.append(_log("FORGERY_CHECK", f"Forgery check recommendation: {results['recommendation']}"))
+    
+    auto_reject = results["recommendation"] == "REJECT"
+    reject_reason = results.get("rejection_reason", "")
+    
+    if auto_reject:
+        logs.append(_log("FORGERY_CHECK", f"ORCHESTRATOR ALERT: {reject_reason}", level="ERROR"))
+    
+    return {
+        "forgery_analysis": results,
+        "auto_reject": auto_reject,
+        "reject_reason": reject_reason,
+        "logs": logs,
+    }
+
+
+def _check_forgery_result(state: Dict[str, Any]) -> str:
+    """Conditional edge for forgery screening."""
+    if state.get("auto_reject"):
+        return "REJECT"
+    return "CONTINUE"
 
 
 async def _parallel_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -336,7 +370,7 @@ async def _enrichment_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # ── Step 4: CIBIL Credit Bureau Check ──────────────────────────────────
     try:
-        logs.append(_log(agent, "Fetching CIBIL credit report..."))
+        logs.append(_log(agent, "Fetching ENHANCED CIBIL credit report..."))
         cin = state.get("cin", "")
         promoter_details = state.get("promoter_details", [])
 
@@ -344,29 +378,26 @@ async def _enrichment_node(state: Dict[str, Any]) -> Dict[str, Any]:
             promoter_names = [p.get("name", "") for p in promoter_details]
             promoter_pans = [p.get("pan", "") for p in promoter_details if p.get("pan")]
 
-            cibil_report = fetch_cibil_report(
+            cibil_res = await get_cibil_score_enhanced(
                 company_name=state.get("company_name", ""),
                 cin=cin,
                 promoter_names=promoter_names,
                 promoter_pans=promoter_pans if promoter_pans else None,
-                use_mock=True,  # Use mock data for now; set to False in production
-                mock_scenario="good",  # Can be dynamic based on other signals
+                use_mock=True,
+                mock_scenario="good",
             )
 
-            state["cibil_report"] = {
-                "company_score": cibil_report.company_score.score if cibil_report.company_score else 0,
-                "company_wilful_defaulter": cibil_report.company_score.wilful_defaulter if cibil_report.company_score else False,
-                "average_director_score": cibil_report.average_director_score,
-                "lowest_director_score": cibil_report.lowest_director_score,
-                "any_director_defaulter": cibil_report.any_director_wilful_defaulter,
-                "report_date": cibil_report.report_date.isoformat(),
-            }
+            state["cibil_report"] = cibil_res
+            # Sync top-level score for scorer_agent
+            state["cibil_score"] = cibil_res.get("company_score", 0)
+            state["cibil_enhanced"] = cibil_res.get("cibil_enhanced")
+            
             logs.append(
                 _log(
                     agent,
-                    f"CIBIL: Company Score: {cibil_report.company_score.score if cibil_report.company_score else 'N/A'} | "
-                    f"Avg Director Score: {cibil_report.average_director_score:.0f}",
-                    level="SUCCESS" if cibil_report.average_director_score >= 700 else "WARN",
+                    f"CIBIL Enhanced: Score: {state['cibil_score']} | "
+                    f"Avg Director Score: {cibil_res.get('average_director_score', 0):.0f}",
+                    level="SUCCESS" if state["cibil_score"] >= 650 else "WARN",
                 )
             )
         else:
@@ -376,40 +407,30 @@ async def _enrichment_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # ── Step 5: MCA (Ministry of Corporate Affairs) Verification ───────────
     try:
-        logs.append(_log(agent, "Fetching MCA company master data..."))
+        logs.append(_log(agent, "Fetching MCA master data & network analysis..."))
         cin = state.get("cin", "")
 
         if cin:
-            mca_report = fetch_mca_report(
+            # Use the new run_mca_scraper for integrated network analysis
+            mca_res = await run_mca_scraper(
                 cin=cin,
                 company_name=state.get("company_name", ""),
-                use_mock=True,  # Use mock data for now
-                mock_scenario="clean",  # Can be dynamic
+                use_mock=True,
+                mock_scenario="clean",
             )
 
-            state["mca_report"] = {
-                "company_status": mca_report.company_master.company_status,
-                "incorporation_date": mca_report.company_master.incorporation_date.isoformat() if mca_report.company_master.incorporation_date else "",
-                "authorized_capital": mca_report.company_master.authorized_capital,
-                "paid_up_capital": mca_report.company_master.paid_up_capital,
-                "total_directors": len(mca_report.directors),
-                "disqualified_directors": sum(1 for d in mca_report.directors if d.is_disqualified),
-                "total_charges": len(mca_report.charges),
-                "unsatisfied_charges": sum(1 for c in mca_report.charges if c.charge_status == "UNSATISFIED"),
-                "strike_off_notice": mca_report.compliance.strike_off_notice,
-                "defaulter_list": mca_report.compliance.defaulter_list,
-            }
-
-            # Update incorporation_date in state if not already set
-            if not state.get("incorporation_date") and mca_report.company_master.incorporation_date:
-                state["incorporation_date"] = mca_report.company_master.incorporation_date.isoformat()
-
+            state["mca_report"] = mca_res
+            # Pass director network to state for scorer_agent/SHAP
+            state["director_network"] = mca_res
+            
+            # Legacy compatibility for cam_generator if needed
+            state["mca_status"] = mca_res.get("company_status")
+            
             logs.append(
                 _log(
                     agent,
-                    f"MCA: Status: {mca_report.company_master.company_status} | Directors: {len(mca_report.directors)} | "
-                    f"Charges: {len(mca_report.charges)}",
-                    level="SUCCESS" if mca_report.company_master.company_status == "ACTIVE" else "ERROR",
+                    f"MCA: Status: {mca_res.get('company_status')} | Risk Level: {mca_res.get('network_risk_level')}",
+                    level="SUCCESS" if mca_res.get('network_risk_level') != "HIGH" else "ERROR",
                 )
             )
         else:
@@ -467,13 +488,25 @@ def build_graph() -> Any:
     """Build and compile the LangGraph StateGraph."""
     workflow = StateGraph(dict)
 
+    workflow.add_node("forgery_check", _forgery_check_node)
     workflow.add_node("parallel_ingest_research", _parallel_node)
     workflow.add_node("arbitration_check", _arbitration_check_node)
     workflow.add_node("enrichment", _enrichment_node)
     workflow.add_node("scorer", _scorer_node)
     workflow.add_node("cam_generator", _cam_node)
 
-    workflow.set_entry_point("parallel_ingest_research")
+    workflow.set_entry_point("forgery_check")
+    
+    # Conditional edge for forgery screening
+    workflow.add_conditional_edges(
+        "forgery_check",
+        _check_forgery_result,
+        {
+            "REJECT": END,
+            "CONTINUE": "parallel_ingest_research"
+        }
+    )
+    
     workflow.add_edge("parallel_ingest_research", "arbitration_check")
     workflow.add_edge("arbitration_check", "enrichment")
     workflow.add_edge("enrichment", "scorer")

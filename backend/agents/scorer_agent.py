@@ -34,6 +34,8 @@ from scoring.red_flag_engine import (
     RedFlagResult,
     RedFlagSeverity,
 )
+from tools.qualitative_score_quantifier import quantify_qualitative_notes
+from tools.shap_narrative_generator import generate_shap_narrative
 
 
 def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
@@ -412,6 +414,15 @@ async def run_scorer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         sector=sector,
         is_negative_list=False,  # Would come from sector analysis
         gst_discrepancy_percent=risk_indicators.get("gst_discrepancy_percent", 0),
+        # Advanced Feature Parameters
+        epfo_ghost_company=state.get("epfo_verification", {}).get("is_ghost_company", False),
+        epfo_revenue_implausible=(state.get("epfo_verification", {}).get("plausibility_verdict", "") == "IMPLAUSIBLE"),
+        document_forgery_detected=("RF_DOCUMENT_FORGERY" in state.get("red_flags", [])),
+        mda_sentiment_score=state.get("mda_sentiment", {}).get("mda_risk_score", 0.0),
+        director_nclt_linked=(state.get("director_network", {}).get("nclt_linked_directors", 0) > 0),
+        promoter_integrity_score=state.get("director_network", {}).get("promoter_integrity_score", 100.0),
+        cibil_recent_enquiries=state.get("cibil_enhanced", {}).get("velocity", {}).get("enquiries_last_30_days", 0),
+        cibil_cross_default=state.get("cibil_enhanced", {}).get("velocity", {}).get("cross_default_risk", False),
     )
 
     red_flag_dict = red_flag_result.to_dict()
@@ -577,11 +588,51 @@ dynamically adjusted based on the borrower's risk profile.
             overrides.insert(0, override_reason)
         scores["overriding_factors"] = overrides
 
-    # ─── Step 11: Recompute weighted total with dynamic weights ──────────────
+    # ─── Step 11: Apply qualitative adjustments from credit officer notes ────
+    pre_override_scores: Dict[str, Any] = {}
+    override_applied = False
+    
+    credit_officer_notes = state.get("credit_officer_notes", "") or qualitative_notes
+    if credit_officer_notes.strip():
+        five_c_raw = {
+            dim: scores.get(dim, {}).get("score", 50) 
+            for dim in ["character", "capacity", "capital", "collateral", "conditions"]
+        }
+        
+        qual_adjustment = await quantify_qualitative_notes(
+            credit_officer_notes=credit_officer_notes,
+            five_c_scores=five_c_raw,
+            company_name=company_name,
+            use_llm=True,
+        )
+        
+        override_applied = True
+        pre_override_scores = {
+            "score_before_qualitative": qual_adjustment["score_before"],
+            "adjustments": qual_adjustment["adjustments_by_dimension"],
+        }
+        
+        # Apply adjusted scores back to the scores dict
+        for dim, adj_data in qual_adjustment.get("adjustments_by_dimension", {}).items():
+            if dim in scores:
+                scores[dim]["score"] = adj_data.get("adjusted_score", scores[dim]["score"])
+                scores[dim].setdefault("reasons", []).append(adj_data.get("adjustment_reason", "Qualitative adjustment"))
+
+    # ─── Step 11b: Recompute weighted total with dynamic weights ──────────────
     scores["weighted_total"] = compute_weighted_total(scores, dynamic_weights)
 
     # ─── Step 12: SHAP attributions ──────────────────────────────────────────
-    scores["shap_attributions"] = compute_shap_attributions(scores, dynamic_weights)
+    base_shap = compute_shap_attributions(scores, dynamic_weights)
+    
+    # Add extra signal attributions from new modules
+    if state.get("mda_sentiment"):
+        base_shap["mda_sentiment_score"] = -state["mda_sentiment"].get("mda_risk_score", 0) * 0.05
+    if state.get("director_network"):
+        base_shap["network_risk_score"] = -state["director_network"].get("network_risk_score", 0) * 0.05
+    if state.get("cibil_enhanced"):
+        base_shap["velocity_score_impact"] = -state["cibil_enhanced"].get("velocity", {}).get("velocity_score_impact", 0) * 0.3
+        
+    scores["shap_attributions"] = base_shap
 
     # ─── Step 13: Supplementary metrics for Results page ─────────────────────
     scores["supplementary"] = {
@@ -594,28 +645,41 @@ dynamically adjusted based on the borrower's risk profile.
         "risk_profile": dynamic_config.risk_profile.value,
     }
 
-    # ─── Step 14: Qualitative override BEFORE/AFTER ──────────────────────────
-    pre_override_scores: Dict[str, Any] = {}
-    override_applied = False
-    if qualitative_notes.strip():
-        qual_data = apply_qualitative_adjustment({}, qualitative_notes)
-        if qual_data.get("_qualitative_adjustments"):
-            override_applied = True
-            pre_override_scores = {
-                "note": "Qualitative notes were factored into Claude's scoring.",
-                "adjustments": qual_data["_qualitative_adjustments"],
-            }
-            for adj in qual_data["_qualitative_adjustments"]:
-                logs.append(_log(agent, f"Qualitative adjustment: {adj}", level="WARN"))
-
+    # ─── Step 14: Generate SHAP-powered Judge's Walkthrough ──────────────────
+    final_score = scores.get("weighted_total", 0)
+    decision = scores.get("recommendation", "REJECT")
+    
+    feature_raw_values = {
+        "character_score": scores.get("character", {}).get("score", 0),
+        "capacity_score": scores.get("capacity", {}).get("score", 0),
+        "capital_score": scores.get("capital", {}).get("score", 0),
+        "collateral_score": scores.get("collateral", {}).get("score", 0),
+        "conditions_score": scores.get("conditions", {}).get("score", 0),
+        "cibil_score": state.get("cibil_score", "N/A"),
+        "dscr": state.get("dscr", "N/A"),
+        "mda_sentiment_score": state.get("mda_sentiment", {}).get("mda_risk_score"),
+        "network_risk_score": state.get("director_network", {}).get("network_risk_score"),
+    }
+    
+    judges_walkthrough = await generate_shap_narrative(
+        shap_attributions=base_shap,
+        feature_raw_values=feature_raw_values,
+        final_score=final_score,
+        decision=decision,
+        company_name=company_name,
+        additional_context=credit_officer_notes,
+    )
+    
+    scores["judges_walkthrough"] = judges_walkthrough
+    
     # ─── Step 15: Add escalation note if required ────────────────────────────
     if red_flag_result.escalation_required:
         scores["escalation_required"] = True
         scores["escalation_reason"] = f"{len(red_flag_result.flags_by_severity.get('HIGH', []))} high-severity flags require management approval"
         logs.append(_log(agent, f"ESCALATION REQUIRED: {scores['escalation_reason']}", level="WARN"))
 
-    rec = scores.get("recommendation", "REJECT")
-    total = scores.get("weighted_total", 0)
+    rec = decision
+    total = final_score
     logs.append(
         _log(
             agent,

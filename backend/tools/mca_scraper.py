@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
+from tools.mca_network_analyzer import analyze_mca_network
+
 
 @dataclass
 class MCACompanyMaster:
@@ -486,6 +488,40 @@ def mca_report_to_dict(report: MCAReport) -> Dict[str, Any]:
             "defaulter_list": report.compliance_status.defaulter_list,
         },
         "red_flags": report.red_flags,
+    }
+
+
+async def run_mca_scraper(company_cin: str, company_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Enhanced MCA scraper that includes network risk analysis.
+    """
+    mca_report = fetch_mca_report(cin=company_cin, company_name=company_name)
+    
+    director_dins = [d.din for d in mca_report.directors]
+    
+    # ── NEW: Network analysis ──────────────────────────────────────────
+    network_analysis = await analyze_mca_network(
+        company_cin=company_cin,
+        director_dins=director_dins,
+    )
+    
+    # We can either return mca_report_to_dict or a custom dict. Based on existing pipeline:
+    return {
+        "company_status": mca_report.company_master.company_status,
+        "incorporation_date": mca_report.company_master.date_of_incorporation,
+        "authorized_capital": mca_report.company_master.authorized_capital,
+        "paid_up_capital": mca_report.company_master.paid_up_capital,
+        "total_directors": len(mca_report.directors),
+        "disqualified_directors": sum(1 for d in mca_report.directors if d.is_disqualified),
+        "total_charges": len(mca_report.charges),
+        "unsatisfied_charges": sum(1 for c in mca_report.charges if c.charge_status == "Outstanding" or c.charge_status == "UNSATISFIED"),
+        "strike_off_notice": mca_report.compliance_status.strike_off_notice,
+        "defaulter_list": mca_report.compliance_status.defaulter_list,
+        "director_network": network_analysis,
+        "promoter_integrity_score": network_analysis.get("promoter_integrity_score", 75),
+        "network_risk_level": network_analysis.get("network_risk_level", "LOW"),
+        "nclt_linked_directors": len(network_analysis.get("connected_nclt_entities", [])) > 0,
+        "shell_company_links": network_analysis.get("shell_company_links", 0),
     }
 
 

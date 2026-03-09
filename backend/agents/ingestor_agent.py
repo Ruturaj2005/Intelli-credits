@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -15,6 +16,8 @@ from anthropic import Anthropic
 from tools.gst_analyser import analyse_gst_documents
 from tools.pdf_parser import format_documents_for_llm
 from utils.prompts import INGESTOR_PROMPT
+from tools.mda_sentiment_analyzer import analyze_mda_sentiment, MDASection
+from tools.document_forgery_detector import screen_documents_batch
 
 
 def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
@@ -134,6 +137,23 @@ def _apply_rule_based_flags(data: Dict[str, Any], loan_amount: float) -> List[st
 
 # ─── Main Agent Function (LangGraph node) ────────────────────────────────────
 
+async def _extract_mda_section(full_text: str) -> str:
+    """Extract MD&A section from annual report text."""
+    # Look for common MD&A headers in Indian annual reports
+    patterns = [
+        r"Management Discussion.*?(?=(?:Standalone|Consolidated|Report on)|$)",
+        r"Management's Discussion.*?(?=(?:Standalone|Report)|$)",
+        r"MD&A.*?(?=(?:Annexure|Schedule|Notes to)|$)",
+    ]
+    for pat in patterns:
+        match = re.search(pat, full_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            return match.group(0)[:8000]  # cap at 8k chars
+    return full_text[:4000]  # fallback: use first 4k chars
+
+
+# ─── Main Agent Function (LangGraph node) ────────────────────────────────────
+
 async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     LangGraph node: Ingestor Agent.
@@ -143,7 +163,27 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     logs: List[Dict[str, Any]] = []
     agent = "INGESTOR"
 
-    logs.append(_log(agent, f"Starting document ingestion for {state['company_name']}"))
+    # ── Step 0: Forgery screening ─────────────────────────────────────
+    uploaded_files = state.get("uploaded_files", []) or state.get("raw_document_bytes", [])
+    if uploaded_files:
+        forgery_check = screen_documents_batch(uploaded_files)
+        if forgery_check["overall_recommendation"] == "REJECT":
+            logs.append(_log(agent, f"Pipeline blocked. Document forgery detected: {forgery_check['critical_documents']}", level="ERROR"))
+            return {
+                **state,
+                "pipeline_blocked": True,
+                "block_reason": "DOCUMENT_FORGERY_DETECTED",
+                "block_detail": f"Critical forgery risk in: {forgery_check['critical_documents']}",
+                "forgery_screening": forgery_check,
+                "logs": logs,
+                "agent_statuses": {**state.get("agent_statuses", {}), "ingestor": "ERROR"},
+            }
+        if forgery_check["overall_recommendation"] == "MANUAL_REVIEW":
+            state["forgery_warning"] = forgery_check
+            state["requires_manual_document_review"] = True
+            logs.append(_log(agent, "Document forgery warning generated.", level="WARN"))
+
+    logs.append(_log(agent, f"Starting document ingestion for {state.get('company_name', 'Unknown')}"))
 
     documents: List[Dict[str, Any]] = state.get("documents", [])
     company_name = state.get("company_name", "Unknown Company")
@@ -243,12 +283,42 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     logs.append(_log(agent, "Ingestor Agent DONE.", level="SUCCESS"))
 
+    # ── Step 5: MD&A Sentiment Analysis ──────────────────────────────────────
+    mda_texts = {}
+    annual_reports = [
+        doc for doc in documents 
+        if "annual" in doc.get("doc_type", "").lower() or "financial" in doc.get("doc_type", "").lower()
+    ]
+    
+    for idx, doc in enumerate(annual_reports):
+        text = doc.get("text", "")
+        if text:
+            year = doc.get("metadata", {}).get("year", f"Year_{idx}")
+            mda_texts[year] = await _extract_mda_section(text)
+
+    mda_analysis = None
+    if mda_texts:
+        logs.append(_log(agent, f"Running MD&A sentiment analysis on {len(mda_texts)} reports..."))
+        mda_analysis = await analyze_mda_sentiment(
+            mda_texts=mda_texts,
+            company_name=company_name,
+            use_llm=True,
+        )
+        
+        # Auto-escalate if CRITICAL/HIGH
+        if mda_analysis["mda_risk_level"] in ("CRITICAL", "HIGH"):
+            fraud_flags.extend(mda_analysis.get("red_flags", []))
+            extracted.setdefault("red_flags", []).extend(mda_analysis.get("red_flags", []))
+
     # Propagate extracted fields to state for downstream agents
-    return {
+    out_state = {
         "extracted_financials": extracted,
         "fraud_flags": fraud_flags,
         "logs": logs,
         "agent_statuses": {**state.get("agent_statuses", {}), "ingestor": "DONE"},
+        "forgery_warning": state.get("forgery_warning"),
+        "requires_manual_document_review": state.get("requires_manual_document_review"),
+        "mda_sentiment": mda_analysis,
         # Additional fields for new tools
         "cin": extracted.get("cin", ""),
         "incorporation_date": extracted.get("incorporation_date", ""),
@@ -268,3 +338,5 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "short_term_loans": extracted.get("financials", {}).get("short_term_loans", 0),
         "total_assets": extracted.get("financials", {}).get("total_assets", 0),
     }
+
+    return out_state

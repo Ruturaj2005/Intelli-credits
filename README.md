@@ -35,14 +35,31 @@ An end-to-end AI system that automates Credit Appraisal Memo (CAM) generation fo
                          React Frontend
 ```
 
-### Four Agents
-
 | Agent | Purpose | Key Tools |
 |---|---|---|
-| **Ingestor** | Parse financial documents, run GST reconciliation | PyMuPDF, pdfplumber, Claude |
-| **Research** | Web due diligence on company & promoters (ReAct loop) | Tavily, Claude |
-| **Scorer** | Five Cs of Credit scoring with SHAP explainability | Claude, numpy |
-| **CAM Generator** | Generate professional Word document | python-docx, Claude |
+| **Ingestor** | Parse financials & **Screen for forgery** | PyMuPDF, `document_forgery_detector` |
+| **Research** | Web research & **EPFO verification** | Tavily, `epfo_operations_tracker` |
+| **Scorer** | 5Cs + **SHAP Narratives** | `shap_narrative_generator`, `qualitative_score_quantifier` |
+| **CAM Generator** | Generate Word doc with **Judge's Walkthrough** | python-docx, Claude |
+
+---
+
+## v2.1 Advanced Features (The "Fraud & GenAI" Layer)
+
+### 1. Document Forgery Detection
+The pipeline now starts with a **Gateway Forgery Check**. It analyzes PDF metadata and pixel-level variance. If a document is flagged as "REJECT", the orchestrator halts the pipeline immediately to prevent fraud.
+
+### 2. Director Network Risk Analysis (MCA v2)
+Beyond basic company stats, we now map the "Director Network". This flags if any director is linked to entities currently in **NCLT proceedings**, shell companies, or GST-delisted ventures.
+
+### 3. EPFO Operational Reality Check
+Compares claimed revenue against actual EPFO provident fund filings. If a company claims ₹50Cr revenue but has only 2 employees, it is flagged as a **Ghost Company** (RF035).
+
+### 4. SHAP-Powered "Judge's Walkthrough"
+Instead of just showing numeric scores, GenAI now writes a narrative explanation of the math. It translates complex SHAP attributions into a natural language "Judge's Walkthrough" for credit committees.
+
+### 5. MD&A NLP Sentiment
+Analysis of "Management Discussion & Analysis" from Annual Reports to detect subtle linguistic cues of distress or "going concern" risks that aren't yet in the numbers.
 
 ---
 
@@ -78,10 +95,17 @@ intelli-credit/
 │   │   ├── research_agent.py    # Agent 2: Web research (ReAct)
 │   │   ├── scorer_agent.py      # Agent 3: Five Cs scoring
 │   │   └── cam_generator.py     # Agent 4: Word doc generation
-│   ├── tools/
+|   ├── tools/
 │   │   ├── pdf_parser.py        # PyMuPDF + pdfplumber
 │   │   ├── gst_analyser.py      # GSTR reconciliation logic
-│   │   └── web_search.py        # Tavily wrapper
+│   │   ├── web_search.py        # Tavily wrapper
+│   │   ├── document_forgery_detector.py  # NEW: PDF Tampering check
+│   │   ├── mca_network_analyzer.py     # NEW: Director graph risk
+│   │   ├── cibil_velocity_analyzer.py  # NEW: Credit enquiry spikes
+│   │   ├── epfo_operations_tracker.py  # NEW: Ghost company detection
+│   │   ├── mda_sentiment_analyzer.py   # NEW: MD&A NLP
+│   │   ├── qualitative_score_quantifier.py # NEW: Note-to-Score logic
+│   │   └── shap_narrative_generator.py # NEW: GenAI Walkthrough
 │   ├── models/
 │   │   └── schemas.py           # Pydantic models
 │   └── utils/

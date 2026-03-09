@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from tools.cibil_velocity_analyzer import analyze_cibil_enhanced
+
 
 @dataclass
 class CIBILScore:
@@ -439,6 +441,53 @@ def cibil_report_to_dict(report: CIBILReport) -> Dict[str, Any]:
         "overall_risk_flag": report.overall_risk_flag,
         "remarks": report.remarks,
     }
+
+
+async def get_cibil_score_enhanced(
+    company_name: str,
+    cin: str,
+    promoter_names: List[str],
+    promoter_pans: Optional[List[str]] = None,
+    base_rate_pct: float = 10.0,
+    use_mock: bool = True,
+    mock_scenario: str = "good",
+) -> Dict[str, Any]:
+    """
+    Enhanced CIBIL: score + velocity + DPD trend + cross-default.
+    Replace calls to get_cibil_score() with this throughout the pipeline.
+    """
+    # Fetch raw CIBIL report
+    raw_report = fetch_cibil_report(
+        company_name=company_name,
+        cin=cin,
+        promoter_names=promoter_names,
+        promoter_pans=promoter_pans,
+        use_mock=use_mock,
+        mock_scenario=mock_scenario,
+    )
+    
+    base_score = raw_report.company_cibil.score if raw_report.company_cibil else 0
+    
+    result = await analyze_cibil_enhanced(
+        cibil_score=base_score,
+        entity_id=cin,
+        company_name=company_name,
+        base_rate_pct=base_rate_pct,
+    )
+    
+    # Merge enhanced analysis into the dictionary
+    report_dict = cibil_report_to_dict(raw_report)
+    
+    # Expose fields expected by the state and agents
+    report_dict["cibil_enhanced"] = result
+    report_dict["company_score"] = base_score
+    report_dict["company_wilful_defaulter"] = raw_report.company_cibil.wilful_defaulter if raw_report.company_cibil else False
+    report_dict["average_director_score"] = sum(d.score for d in raw_report.director_cibils) / max(1, len(raw_report.director_cibils))
+    report_dict["lowest_director_score"] = min([d.score for d in raw_report.director_cibils]) if raw_report.director_cibils else 0
+    report_dict["any_director_defaulter"] = any(d.wilful_defaulter for d in raw_report.director_cibils)
+    report_dict["report_date"] = raw_report.company_cibil.score_date if raw_report.company_cibil else datetime.now().isoformat()
+    
+    return report_dict
 
 
 # ─── Example Usage ───────────────────────────────────────────────────────────

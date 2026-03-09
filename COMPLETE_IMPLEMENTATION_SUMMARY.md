@@ -1,8 +1,8 @@
 # Intelli-Credits: Complete Implementation Documentation
 
-**Date**: March 6, 2026
-**Status**: ✅ All Components Implemented
-**System**: End-to-End Corporate Credit Assessment Platform
+**Date**: March 8, 2026
+**Status**: ✅ v2.1 Advanced Features Integrated
+**System**: End-to-End Corporate Credit Assessment Platform (with Fraud & GenAI narrativization)
 
 ---
 
@@ -58,7 +58,19 @@ All credit manager requirements have been successfully implemented. The system n
   - Red flags and discrepancies
   - Conditions for approval
 
-### 4. **Enhanced Ingestor Agent** (`backend/agents/ingestor_agent.py`)
+### 4. **Advanced Feature Modules (v2.1)** ⭐ NEW
+- **Feature Layer 1: Fraud & Operations (Gateway)**
+  - **Document Forgery Detector** (`tools/document_forgery_detector.py`): PDF metadata & pixel variance screening to block tampered docs.
+  - **EPFO Operations Tracker** (`tools/epfo_operations_tracker.py`): Cross-verifies revenue against employee counts to flag ghost companies.
+- **Feature Layer 2: Deep Network & Sentiment Analysis**
+  - **MCA Network Analyzer** (`tools/mca_network_analyzer.py`): Maps director links to NCLT/Shell entities; computes Promoter Integrity Score.
+  - **MD&A Sentiment Analyzer** (`tools/mda_sentiment_analyzer.py`): NLP analysis of Annual Reports to detect hidden "going concern" risks.
+- **Feature Layer 3: Credit & Logic Upgrades**
+  - **CIBIL Velocity Analyzer** (`tools/cibil_velocity_analyzer.py`): Tracks enquiry spikes and cross-default risks.
+  - **Qualitative Score Quantifier** (`tools/qualitative_score_quantifier.py`): Converts human credit officer notes into quantitative 5C adjustments.
+  - **SHAP Narrative Generator** (`tools/shap_narrative_generator.py`): GenAI "Judge's Walkthrough" that translates math into business prose.
+
+### 5. **Enhanced Ingestor Agent** (`backend/agents/ingestor_agent.py`)
 - **New Fields Extracted**:
   - `cin`: Corporate Identification Number
   - `incorporation_date`: Company incorporation date
@@ -76,17 +88,19 @@ All credit manager requirements have been successfully implemented. The system n
 ### 5. **Orchestrator Pipeline** (`backend/agents/orchestrator.py`)
 - **New Pipeline Flow**:
   ```
-  1. Parallel Ingest & Research
-  2. Arbitration Check
-  3. → ENRICHMENT NODE (NEW) ←
+  1. Forgery Screening Gateway (NEW)
+  2. Parallel Ingest & Research
+  3. Arbitration Check
+  4. → ENRICHMENT NODE (ENHANCED) ←
      ├─ NTS Sector Analysis
      ├─ Working Capital Analysis
      ├─ FOR Calculation
-     ├─ CIBIL Credit Check
-     ├─ MCA Verification
-     └─ RCU Field Verification
-  4. Scorer (with dynamic weights & red flags)
-  5. CAM Generator
+     ├─ CIBIL Credit Check (Velocity-Aware)
+     ├─ MCA Verification (Network-Aware)
+     ├─ RCU Field Verification
+     └─ EPFO Operations Verification (NEW)
+  5. Scorer (Qualitative Quantification + SHAP Narrative)
+  6. CAM Generator (Detailed Decision Walkthrough)
   ```
 - **Enrichment Node Features**:
   - Runs all 6 specialized tools sequentially
@@ -244,15 +258,17 @@ Documents: ITR, Balance Sheet, GST Returns, Bank Statements
 | Component | Status | Coverage |
 |-----------|--------|----------|
 | Dynamic Weighting | ✅ | 4 risk profiles, 5 parameters |
-| Red Flag Engine | ✅ | 21 auto-reject triggers |
+| Red Flag Engine | ✅ | 30+ triggers (RF001-RF042) |
 | Risk Matrix | ✅ | 8 factors, 6 categories |
-| CIBIL Integration | ✅ | Company + Directors (mock ready) |
-| MCA Scraper | ✅ | Company master data (mock ready) |
+| CIBIL Integration | ✅ | Velocity, DPD, Cross-Default |
+| MCA Scraper | ✅ | Network risks, Integrity score |
 | FOR Calculator | ✅ | 4-tier classification |
 | Working Capital | ✅ | 8 liquidity metrics |
 | NTS Analyzer | ✅ | 11 sectors configured |
 | RCU Verification | ✅ | 6 verification modules |
-| Credit Policy | ✅ | 100+ configurable thresholds |
+| Forgery Check | ✅ | Metadata & Pixel tampering |
+| SHAP Narrative | ✅ | GenAI Judge's Walkthrough |
+| EPFO Tracking | ✅ | Ghost company detection |
 
 ---
 
@@ -480,6 +496,6 @@ The platform is now trusted by credit managers and ready for deployment after AP
 
 ---
 
-*Generated on: March 6, 2026*
-*Version: 2.0*
+*Generated on: March 8, 2026*
+*Version: 2.1*
 *Contact: Intelli-Credits Development Team*

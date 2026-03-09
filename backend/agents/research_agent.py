@@ -17,6 +17,7 @@ from tools.web_search import (
     run_due_diligence_searches,
 )
 from utils.prompts import RESEARCH_SYNTHESIS_PROMPT
+from tools.epfo_operations_tracker import verify_operations_via_epfo
 
 
 def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
@@ -208,8 +209,51 @@ async def run_research_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         for sr in search_results
     ]
 
+    # ── NEW: EPFO operational verification ────────────────────────────
+    logs.append(_log(agent, "Running EPFO operational verification..."))
+    
+    # Extract data for EPFO check
+    gstin = state.get("gstin", "") or extracted_fin.get("gstin", "27AAAAA0000A1Z5") # mock fallback if not found
+    financials = extracted_fin.get("financials", {})
+    revenue_3yr = financials.get("revenue_3yr", [])
+    claimed_revenue_cr = revenue_3yr[-1] if revenue_3yr else state.get("revenue_cr", 0)
+    
+    epfo_result = None
+    red_flags = state.get("red_flags", [])
+    auto_reject = state.get("auto_reject", False)
+    reject_reason = state.get("reject_reason", "")
+    
+    if gstin and claimed_revenue_cr > 0:
+        epfo_result = await verify_operations_via_epfo(
+            gstin=gstin,
+            claimed_revenue_cr=claimed_revenue_cr,
+            sector=sector,
+            company_name=company_name,
+            gst_turnover_cr=state.get("gst_turnover_cr"),
+            bank_inflow_cr=state.get("bank_inflow_cr"),
+        )
+        
+        if epfo_result["is_ghost_company"]:
+            red_flags.append("RF_EPFO_GHOST_COMPANY")
+            auto_reject = True
+            reject_reason = (
+                f"Ghost company pattern: ₹{claimed_revenue_cr:.0f} Cr revenue "
+                f"with only {epfo_result['epfo_employee_count']} EPFO employees."
+            )
+            logs.append(_log(agent, f"EPFO Check: {reject_reason}", level="ERROR"))
+        elif epfo_result["plausibility_verdict"] == "IMPLAUSIBLE":
+            red_flags.append("RF_EPFO_REVENUE_IMPLAUSIBLE")
+            logs.append(_log(agent, "EPFO Check: Revenue plausibility is IMPLAUSIBLE.", level="WARN"))
+        else:
+            logs.append(_log(agent, "EPFO Check: Revenue is plausible based on EPFO records.", level="SUCCESS"))
+
+
     return {
         "research_findings": research_data,
+        "epfo_verification": epfo_result,
+        "red_flags": red_flags,
+        "auto_reject": auto_reject,
+        "reject_reason": reject_reason,
         "logs": logs,
         "agent_statuses": {**state.get("agent_statuses", {}), "research": "DONE"},
     }

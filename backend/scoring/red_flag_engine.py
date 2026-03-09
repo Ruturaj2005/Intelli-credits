@@ -652,6 +652,135 @@ def _check_group_contagion_risk(has_contagion_risk: bool, stressed_entities: int
     return None
 
 
+def _check_epfo_ghost_company(epfo_ghost_company: bool) -> Optional[RedFlag]:
+    if epfo_ghost_company:
+        return RedFlag(
+            code="RF035",
+            name="EPFO Ghost Company",
+            category=RedFlagCategory.OPERATIONAL,
+            severity=RedFlagSeverity.CRITICAL,
+            action=RedFlagAction.AUTO_REJECT,
+            description="Company claims revenue >10Cr but has under 5 employees.",
+            trigger_value=True,
+            threshold="Plausible employee count",
+            remediation="Provide verifiable payroll and PF records",
+            override_possible=False,
+        )
+    return None
+
+def _check_epfo_revenue_implausible(epfo_revenue_implausible: bool) -> Optional[RedFlag]:
+    if epfo_revenue_implausible:
+        return RedFlag(
+            code="RF036",
+            name="EPFO Revenue Implausible",
+            category=RedFlagCategory.OPERATIONAL,
+            severity=RedFlagSeverity.HIGH,
+            action=RedFlagAction.ESCALATE,
+            description="Claimed revenue is mathematically implausible given employee count and typical sector revenue-per-employee.",
+            trigger_value=True,
+            threshold="Plausible revenue/employee",
+            remediation="Provide detailed justification for high revenue-per-employee",
+            override_possible=True,
+        )
+    return None
+
+def _check_document_forgery(document_forgery_detected: bool) -> Optional[RedFlag]:
+    if document_forgery_detected:
+        return RedFlag(
+            code="RF037",
+            name="Document Forgery Detected",
+            category=RedFlagCategory.FRAUD,
+            severity=RedFlagSeverity.CRITICAL,
+            action=RedFlagAction.AUTO_REJECT,
+            description="PDF metadata or pixel variance indicates document tampering.",
+            trigger_value=True,
+            threshold="Genuine documents",
+            remediation="Submit original physical documents for verification",
+            override_possible=False,
+        )
+    return None
+
+def _check_mda_sentiment(mda_sentiment_score: float) -> Optional[RedFlag]:
+    if mda_sentiment_score >= 80:
+        return RedFlag(
+            code="RF038",
+            name="Adverse MD&A Sentiment",
+            category=RedFlagCategory.FINANCIAL,
+            severity=RedFlagSeverity.HIGH,
+            action=RedFlagAction.ESCALATE,
+            description="Management Discussion & Analysis explicitly mentions severe going-concern risks or defaults.",
+            trigger_value=mda_sentiment_score,
+            threshold=80.0,
+            remediation="Obtain management explanation on going-concern risks",
+            override_possible=True,
+        )
+    return None
+
+def _check_director_nclt_link(director_nclt_linked: bool) -> Optional[RedFlag]:
+    if director_nclt_linked:
+        return RedFlag(
+            code="RF039",
+            name="Director NCLT Link",
+            category=RedFlagCategory.REGULATORY,
+            severity=RedFlagSeverity.HIGH,
+            action=RedFlagAction.ESCALATE,
+            description="Director is linked to another entity currently in NCLT/Insolvency proceedings.",
+            trigger_value=True,
+            threshold="No NCLT linked directors",
+            remediation="Clarify extent of director's involvement in the NCLT entity",
+            override_possible=True,
+        )
+    return None
+
+def _check_promoter_integrity(promoter_integrity_score: float) -> Optional[RedFlag]:
+    if promoter_integrity_score < 30:
+        return RedFlag(
+            code="RF040",
+            name="Promoter Integrity Critical",
+            category=RedFlagCategory.FRAUD,
+            severity=RedFlagSeverity.CRITICAL,
+            action=RedFlagAction.AUTO_REJECT,
+            description="MCA network analysis yields promoter integrity score < 30/100.",
+            trigger_value=promoter_integrity_score,
+            threshold=30.0,
+            remediation="No remediation - severe integrity concerns",
+            override_possible=False,
+        )
+    return None
+
+def _check_cibil_velocity(cibil_recent_enquiries: int) -> Optional[RedFlag]:
+    if cibil_recent_enquiries > 5:
+        return RedFlag(
+            code="RF041",
+            name="High Velocity CIBIL Enquiries",
+            category=RedFlagCategory.CREDIT,
+            severity=RedFlagSeverity.HIGH,
+            action=RedFlagAction.ESCALATE,
+            description="Abnormal spike (>5) in unsecured loan enquiries in past 30 days.",
+            trigger_value=cibil_recent_enquiries,
+            threshold=5,
+            remediation="Provide justification for sudden credit hunger",
+            override_possible=True,
+        )
+    return None
+
+def _check_cibil_cross_default(cibil_cross_default: bool) -> Optional[RedFlag]:
+    if cibil_cross_default:
+        return RedFlag(
+            code="RF042",
+            name="CIBIL Cross-Default Risk",
+            category=RedFlagCategory.CREDIT,
+            severity=RedFlagSeverity.HIGH,
+            action=RedFlagAction.ESCALATE,
+            description="Borrower is defaulting on one facility although standard on others.",
+            trigger_value=True,
+            threshold="No current defaults",
+            remediation="Clear the defaulted facility and provide NOC",
+            override_possible=True,
+        )
+    return None
+
+
 # ─── Main Evaluation Function ────────────────────────────────────────────────
 
 def evaluate_red_flags(
@@ -696,6 +825,15 @@ def evaluate_red_flags(
     group_contagion_risk: bool = False,
     group_stressed_entities: int = 0,
     group_debt_equity: float = 0,
+    # Advanced Feature Parameters (RF035-RF042)
+    epfo_ghost_company: bool = False,
+    epfo_revenue_implausible: bool = False,
+    document_forgery_detected: bool = False,
+    mda_sentiment_score: float = 0.0,
+    director_nclt_linked: bool = False,
+    promoter_integrity_score: float = 100.0,
+    cibil_recent_enquiries: int = 0,
+    cibil_cross_default: bool = False,
 ) -> RedFlagResult:
     """
     Evaluate all red flag conditions and return comprehensive result.
@@ -732,6 +870,15 @@ def evaluate_red_flags(
         _check_cheque_bounces(cheque_bounce_count),
         _check_promoter_default_history(promoter_defaulted_ventures, promoter_default_amount_cr),
         _check_group_contagion_risk(group_contagion_risk, group_stressed_entities, group_debt_equity),
+        # Advanced Feature Checks (RF035-RF042)
+        _check_epfo_ghost_company(epfo_ghost_company),
+        _check_epfo_revenue_implausible(epfo_revenue_implausible),
+        _check_document_forgery(document_forgery_detected),
+        _check_mda_sentiment(mda_sentiment_score),
+        _check_director_nclt_link(director_nclt_linked),
+        _check_promoter_integrity(promoter_integrity_score),
+        _check_cibil_velocity(cibil_recent_enquiries),
+        _check_cibil_cross_default(cibil_cross_default),
     ]
 
     flags = [f for f in checks if f is not None]
