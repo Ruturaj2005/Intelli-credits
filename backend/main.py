@@ -1,7 +1,7 @@
 """
 FastAPI application — Intelli-Credit Backend
 Handles file uploads, orchestrates the multi-agent pipeline,
-persists state in SQLite, and streams live logs via WebSocket.
+persists state in MongoDB, and streams live logs via WebSocket.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import aiosqlite
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -41,85 +41,100 @@ from models.schemas import (
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
-DB_PATH = os.getenv("SQLITE_DB_PATH", "./intelli_credit.db")
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/intelli_credit")
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# ─── MongoDB Client ───────────────────────────────────────────────────────────
+
+mongo_client: Optional[AsyncIOMotorClient] = None
+db = None
+
+
+def get_db():
+    """Get MongoDB database instance."""
+    return db
+
+
 # ─── DB Helpers ───────────────────────────────────────────────────────────────
 
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                job_id      TEXT PRIMARY KEY,
-                status      TEXT NOT NULL DEFAULT 'QUEUED',
-                company_name TEXT,
-                sector      TEXT,
-                state_json  TEXT,
-                created_at  TEXT,
-                updated_at  TEXT
-            )
-        """)
-        await db.commit()
+    """Initialize MongoDB connection and create indexes."""
+    global mongo_client, db
+    mongo_client = AsyncIOMotorClient(MONGODB_URI)
+    db = mongo_client.get_database()  # Uses database from URI
+    
+    # Create indexes for better query performance
+    await db.jobs.create_index("job_id", unique=True)
+    await db.jobs.create_index([("created_at", -1)])
+    await db.jobs.create_index("status")
+
+
+async def close_db():
+    """Close MongoDB connection."""
+    if mongo_client:
+        mongo_client.close()
 
 
 async def save_job(job_id: str, state: Dict[str, Any]):
-    async with aiosqlite.connect(DB_PATH) as db:
-        now = datetime.now().isoformat()
-        await db.execute(
-            """INSERT INTO jobs (job_id, status, company_name, sector, state_json, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(job_id) DO UPDATE SET
-                   status=excluded.status,
-                   state_json=excluded.state_json,
-                   updated_at=excluded.updated_at
-            """,
-            (
-                job_id,
-                state.get("status", "QUEUED"),
-                state.get("company_name", ""),
-                state.get("sector", ""),
-                json.dumps(state),
-                now,
-                now,
-            ),
+    """Save or update job state in MongoDB."""
+    database = get_db()
+    now = datetime.now().isoformat()
+    
+    job_data = {
+        "job_id": job_id,
+        "status": state.get("status", "QUEUED"),
+        "company_name": state.get("company_name", ""),
+        "sector": state.get("sector", ""),
+        "state": state,
+        "updated_at": now,
+    }
+    
+    # Check if job exists
+    existing = await database.jobs.find_one({"job_id": job_id})
+    
+    if existing:
+        # Update existing job
+        await database.jobs.update_one(
+            {"job_id": job_id},
+            {"$set": job_data}
         )
-        await db.commit()
+    else:
+        # Insert new job
+        job_data["created_at"] = now
+        await database.jobs.insert_one(job_data)
 
 
 async def load_job(job_id: str) -> Optional[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT state_json FROM jobs WHERE job_id = ?", (job_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                return json.loads(row[0])
+    """Load job state from MongoDB."""
+    database = get_db()
+    job = await database.jobs.find_one({"job_id": job_id})
+    
+    if job:
+        return job.get("state")
     return None
 
 
 async def list_recent_jobs(limit: int = 20) -> List[Dict[str, Any]]:
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT job_id, status, company_name, sector, created_at, updated_at "
-            "FROM jobs ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ) as cursor:
-            rows = await cursor.fetchall()
-            return [
-                {
-                    "job_id": r[0],
-                    "status": r[1],
-                    "company_name": r[2],
-                    "sector": r[3],
-                    "created_at": r[4],
-                    "updated_at": r[5],
-                }
-                for r in rows
-            ]
+    """Get list of recent jobs from MongoDB."""
+    database = get_db()
+    cursor = database.jobs.find().sort("created_at", -1).limit(limit)
+    
+    jobs = []
+    async for job in cursor:
+        jobs.append({
+            "job_id": job.get("job_id"),
+            "status": job.get("status"),
+            "company_name": job.get("company_name"),
+            "sector": job.get("sector"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+        })
+    
+    return jobs
 
 
 # ─── WebSocket Manager ────────────────────────────────────────────────────────
@@ -155,8 +170,10 @@ manager = ConnectionManager()
 async def lifespan(app: FastAPI):
     await init_db()
     yield
-
-
+"""Application lifespan manager - startup and shutdown."""
+    await init_db()
+    yield
+    await close_db()
 # ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(

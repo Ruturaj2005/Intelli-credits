@@ -1,7 +1,7 @@
 """
 Agent 2 — Research Agent
-Runs 5 ordered web searches using Tavily, then synthesises findings
-with Claude using a ReAct-style loop to assess company & promoter risk.
+Runs 5 ordered web searches using SurfApi, then synthesises findings
+with Gemini using a ReAct-style loop to assess company & promoter risk.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List
 
-from anthropic import Anthropic
+import google.generativeai as genai
 
 from tools.web_search import (
     format_search_results_for_llm,
@@ -29,14 +29,19 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
     }
 
 
-def _call_claude(prompt: str, max_tokens: int = 4096) -> str:
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+def _call_gemini(prompt: str, max_tokens: int = 4096) -> str:
+    """Call Gemini API with the given prompt."""
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=0.7,
+        )
     )
-    return message.content[0].text
+    return response.text
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
@@ -107,7 +112,7 @@ def _react_reason(
 async def run_research_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     LangGraph node: Research Agent.
-    Runs 5 ordered Tavily searches then uses Claude to synthesise findings.
+    Runs 5 ordered SurfApi searches then uses Gemini to synthesise findings.
     """
     logs: List[Dict[str, Any]] = []
     agent = "RESEARCH"
@@ -120,7 +125,7 @@ async def run_research_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     logs.append(_log(agent, f"Starting research for '{company_name}'..."))
 
     # ── Step 1: Execute 5 ordered searches ────────────────────────────────────
-    logs.append(_log(agent, "Executing 5 due diligence web searches via Tavily..."))
+    logs.append(_log(agent, "Executing 5 due diligence web searches via SurfApi..."))
 
     search_results: List[Dict[str, Any]] = []
     accumulated_context: List[str] = []
@@ -162,11 +167,11 @@ async def run_research_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         logs.append(_log(agent, "No critical risk signals found in search results."))
 
     # ── Step 2: Claude synthesis ───────────────────────────────────────────────
-    logs.append(_log(agent, "Synthesising search results with Claude..."))
+    logs.append(_log(agent, "Synthesising search results with Gemini..."))
 
     formatted_results = format_search_results_for_llm(search_results)
     if not formatted_results.strip():
-        formatted_results = "No web search results available — Tavily may be unavailable."
+        formatted_results = "No web search results available — SurfApi may be unavailable."
 
     prompt = RESEARCH_SYNTHESIS_PROMPT.format(
         company_name=company_name,
@@ -175,14 +180,14 @@ async def run_research_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        raw_response = _call_claude(prompt)
+        raw_response = _call_gemini(prompt)
         research_data = _extract_json(raw_response)
 
         if not research_data:
             logs.append(_log(agent, "JSON parse failed — using safe defaults.", level="WARN"))
             research_data = _default_research()
     except Exception as exc:
-        logs.append(_log(agent, f"Claude synthesis error: {exc}", level="ERROR"))
+        logs.append(_log(agent, f"Gemini synthesis error: {exc}", level="ERROR"))
         research_data = _default_research()
 
     # ── Step 3: Log summary ───────────────────────────────────────────────────

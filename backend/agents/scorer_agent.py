@@ -376,9 +376,10 @@ async def run_scorer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
 
     This agent now:
     1. Evaluates red flags first (gateway check)
-    2. Computes dynamic weights based on risk profile
-    3. Scores using Five Cs with dynamic weights
-    4. Provides SHAP attributions for explainability
+    2. Integrates compliance results into scoring
+    3. Computes dynamic weights based on risk profile
+    4. Scores using Five Cs with dynamic weights + compliance
+    5. Provides SHAP attributions for explainability
     """
     logs: List[Dict[str, Any]] = []
     agent = "SCORER"
@@ -386,6 +387,7 @@ async def run_scorer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     company_name = state.get("company_name", "Unknown Company")
     extracted_fin = state.get("extracted_financials", {})
     research_findings = state.get("research_findings", {})
+    compliance_result = state.get("compliance_result", {})
     fraud_flags = state.get("fraud_flags", [])
     qualitative_notes = state.get("qualitative_notes", "")
     loan_amount = state.get("loan_amount_requested", 0)
@@ -393,6 +395,22 @@ async def run_scorer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     sector = state.get("sector", "")
 
     logs.append(_log(agent, f"Starting ENHANCED risk scoring for '{company_name}'..."))
+    
+    # Check if compliance hard reject (should not reach here due to pipeline short-circuit,
+    # but check defensively)
+    if compliance_result.get("hard_reject", False):
+        logs.append(_log(agent, "⚠️ HARD REJECT from compliance - scoring skipped", "ERROR"))
+        return {
+            "five_cs_scores": _default_scores(loan_amount, {}),
+            "final_recommendation": {
+                "recommendation": "REJECT",
+                "suggested_loan_amount": 0.0,
+                "suggested_interest_rate": "N/A",
+                "weighted_total": 0.0,
+                "decision_reason": compliance_result.get("hard_reject_reason", "Compliance hard reject"),
+            },
+            "logs": logs,
+        }
 
     # ─── Step 1: Extract Risk Indicators ─────────────────────────────────────
     risk_indicators = _extract_risk_indicators(state)
@@ -520,6 +538,7 @@ async def run_scorer_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     # ─── Step 7: Build enhanced scorer prompt ────────────────────────────────
     financials_json = json.dumps(extracted_fin, indent=2)
     research_json = json.dumps(research_findings, indent=2)
+    compliance_json = json.dumps(compliance_result, indent=2)
 
     # Add dynamic weight context to prompt
     weight_context = f"""
@@ -537,6 +556,50 @@ IMPORTANT: Use the weights specified above in your scoring. These weights have b
 dynamically adjusted based on the borrower's risk profile.
 """
 
+    # Add compliance context
+    compliance_score = compliance_result.get("compliance_score", 1.0)
+    total_red_flags = compliance_result.get("total_red_flags", 0)
+    total_amber_flags = compliance_result.get("total_amber_flags", 0)
+    
+    compliance_context = f"""
+INDIAN REGULATORY COMPLIANCE RESULTS:
+- Overall Compliance Score: {compliance_score:.2f}/1.0 ({compliance_score*100:.0f}%)
+- RED Flags: {total_red_flags} | AMBER Flags: {total_amber_flags}
+- Key Compliance Findings (integrate these into 5Cs scoring):
+
+CHARACTER: Consider these factors:
+- Wilful Defaulter: {compliance_result.get('wilful_defaulter', {}).get('details', 'Not checked')}
+- NCLT Status: {compliance_result.get('nclt_status', {}).get('details', 'Not checked')}
+- OTS History: {compliance_result.get('ots_history', {}).get('details', 'Not checked')}
+- PEP Status: {compliance_result.get('pep_status', {}).get('details', 'Not checked')}
+- AML Patterns: {compliance_result.get('aml_patterns', {}).get('details', 'Not checked')}
+
+CAPACITY: Consider these factors:
+- EPFO Compliance: {compliance_result.get('epfo_compliance', {}).get('details', 'Not checked')}
+- Income Tax Compliance: {compliance_result.get('income_tax_compliance', {}).get('details', 'Not checked')}
+- CRILC SMA Status: {compliance_result.get('crilc_sma', {}).get('details', 'Not checked')}
+
+CAPITAL: Consider these factors:
+- Pending IT Demand: ₹{compliance_result.get('income_tax_compliance', {}).get('pending_it_demand', 0):,.0f}
+- Pending GST Demand: ₹{compliance_result.get('gst_deep_dive', {}).get('pending_gst_demand', 0):,.0f}
+
+COLLATERAL: Consider these factors:
+- CERSAI Existing Charges: {compliance_result.get('cersai', {}).get('details', 'Not checked')}
+- LTV Ratio: {compliance_result.get('ltv_ratio', {}).get('details', 'Not checked')}
+
+CONDITIONS: Consider these factors:
+- Sector Classification: {compliance_result.get('sector_classification', {}).get('details', 'Not checked')}
+- GST Deep Dive: {compliance_result.get('gst_deep_dive', {}).get('details', 'Not checked')}
+
+IMPORTANT: Adjust each C score DOWN by 5-15 points based on the severity of compliance issues:
+- RED flags in a dimension: -10 to -15 points
+- AMBER flags: -5 to -10 points
+- GREEN (compliant): No deduction
+
+Full compliance data:
+{compliance_json[:3000]}
+"""
+
     prompt = SCORER_PROMPT.format(
         financials_json=financials_json[:8_000],
         research_json=research_json[:6_000],
@@ -544,10 +607,11 @@ dynamically adjusted based on the borrower's risk profile.
         arbitration_note=arbitration_note or "No arbitration required.",
     )
 
-    # Prepend dynamic weight context
-    prompt = weight_context + "\n\n" + prompt
+    # Prepend dynamic weight context and compliance context
+    prompt = weight_context + "\n\n" + compliance_context + "\n\n" + prompt
 
-    logs.append(_log(agent, "Calling Claude for Five Cs scoring with dynamic weights..."))
+    logs.append(_log(agent, "Calling Claude for Five Cs scoring with dynamic weights + compliance..."))
+    logs.append(_log(agent, f"Compliance integration: {total_red_flags} RED, {total_amber_flags} AMBER flags"))
 
     try:
         raw_response = _call_claude(prompt, max_tokens=6144)
@@ -624,6 +688,11 @@ dynamically adjusted based on the borrower's risk profile.
     # ─── Step 12: SHAP attributions ──────────────────────────────────────────
     base_shap = compute_shap_attributions(scores, dynamic_weights)
     
+    # Add compliance impact to SHAP
+    compliance_score_val = compliance_result.get("compliance_score", 1.0)
+    compliance_penalty = (1.0 - compliance_score_val) * -20.0  # Scale compliance to score impact
+    base_shap["compliance_impact"] = round(compliance_penalty, 3)
+    
     # Add extra signal attributions from new modules
     if state.get("mda_sentiment"):
         base_shap["mda_sentiment_score"] = -state["mda_sentiment"].get("mda_risk_score", 0) * 0.05
@@ -633,6 +702,14 @@ dynamically adjusted based on the borrower's risk profile.
         base_shap["velocity_score_impact"] = -state["cibil_enhanced"].get("velocity", {}).get("velocity_score_impact", 0) * 0.3
         
     scores["shap_attributions"] = base_shap
+    
+    # Add compliance summary to scores
+    scores["compliance_summary"] = {
+        "compliance_score": compliance_score_val,
+        "total_red_flags": total_red_flags,
+        "total_amber_flags": total_amber_flags,
+        "compliance_penalty_applied": abs(compliance_penalty),
+    }
 
     # ─── Step 13: Supplementary metrics for Results page ─────────────────────
     scores["supplementary"] = {

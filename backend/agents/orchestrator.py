@@ -11,11 +11,14 @@ import os
 from datetime import datetime, date
 from typing import Any, Callable, Dict, List, Optional
 
-from anthropic import Anthropic
+import google.generativeai as genai
 from langgraph.graph import StateGraph, END
 
 from agents.ingestor_agent import run_ingestor_agent
 from agents.research_agent import run_research_agent
+from agents.compliance_agent import run_compliance_agent
+from agents.explainable_scoring_agent import run_explainable_scoring_agent
+from agents.bank_capacity_agent import run_bank_capacity_agent
 from agents.scorer_agent import run_scorer_agent
 from agents.cam_generator import run_cam_generator
 from agents.rcu_agent import run_rcu_verification_agent
@@ -39,14 +42,19 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
     }
 
 
-def _call_claude(prompt: str, max_tokens: int = 2048) -> str:
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    msg = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+def _call_gemini(prompt: str, max_tokens: int = 2048) -> str:
+    """Call Gemini API with the given prompt."""
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=0.7,
+        )
     )
-    return msg.content[0].text
+    return response.text
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
@@ -89,10 +97,10 @@ def _should_arbitrate(state: Dict[str, Any]) -> bool:
 
 
 async def _run_arbitration(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Run Claude arbitration step to reconcile conflicting signals."""
+    """Run Gemini arbitration step to reconcile conflicting signals."""
     logs: List[Dict[str, Any]] = [
         _log("ARBITRATOR", "⚡ CONFLICT DETECTED between Ingestor and Research findings.", level="WARN"),
-        _log("ARBITRATOR", "Running Claude arbitration to reconcile signals..."),
+        _log("ARBITRATOR", "Running Gemini arbitration to reconcile signals..."),
     ]
 
     prompt = ARBITRATION_PROMPT.format(
@@ -101,7 +109,7 @@ async def _run_arbitration(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        raw = _call_claude(prompt)
+        raw = _call_gemini(prompt)
         arb_result = _extract_json(raw)
         if not arb_result:
             arb_result = {
@@ -472,6 +480,277 @@ async def _scorer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return updates
 
 
+async def _compliance_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compliance Agent Node - Runs all Indian regulatory checks.
+    
+    If hard reject is triggered, sets state to skip scoring.
+    """
+    updates = await run_compliance_agent(state)
+    updates["agent_statuses"] = {
+        **state.get("agent_statuses", {}),
+        **updates.get("agent_statuses", {}),
+        "compliance": "DONE",
+    }
+    return updates
+
+
+def _check_compliance_result(state: Dict[str, Any]) -> str:
+    """
+    Conditional edge for compliance checks.
+    
+    GATE 1: Compliance Check
+    If hard reject, skip all scoring/capacity checks and go directly to CAM with rejection.
+    """
+    compliance_result = state.get("compliance_result", {})
+    hard_reject = compliance_result.get("hard_reject", False)
+    
+    if hard_reject:
+        return "HARD_REJECT"
+    return "CONTINUE"
+
+
+async def _bank_capacity_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    GATE 2: Bank Capacity Check
+    Assess if bank can lend based on exposure limits and regulatory constraints.
+    """
+    from models.schemas import BankConfig
+    
+    # Get bank configuration from state or use defaults
+    # In production, this would come from database/configuration service
+    bank_config_dict = state.get("bank_config", {
+        "tier1_capital": 50000.0,  # ₹50,000 Cr
+        "tier2_capital": 10000.0,  # ₹10,000 Cr
+        "current_crar": 14.5,  # 14.5%
+        "anbc": 400000.0,  # ₹4,00,000 Cr
+        "psl_achieved_pct": 37.5,  # 37.5% (below 40% target)
+        "pca_status": False,  # Not under PCA
+        "sector_exposures": {},
+        "sector_limits": {
+            "Manufacturing": 25.0,
+            "Services": 20.0,
+            "Trading": 15.0,
+            "Construction": 10.0,
+            "Real Estate": 8.0,
+        },
+        "internal_policy_thresholds": {
+            "min_business_vintage_years": 3,
+            "min_promoter_contribution_pct": 25.0,
+            "min_collateral_coverage": 1.25,
+        },
+    })
+    
+    bank_config = BankConfig(**bank_config_dict)
+    
+    updates = await run_bank_capacity_agent(state, bank_config)
+    updates["agent_statuses"] = {
+        **state.get("agent_statuses", {}),
+        **updates.get("agent_statuses", {}),
+        "bank_capacity": "DONE",
+    }
+    return updates
+
+
+def _check_capacity_result(state: Dict[str, Any]) -> str:
+    """
+    Conditional edge for bank capacity check.
+    
+    GATE 2: If bank cannot lend (exposure limits breached), skip scoring and go to CAM.
+    """
+    capacity_result = state.get("capacity_result", {})
+    can_lend = capacity_result.get("can_lend", True)
+    
+    if not can_lend:
+        return "HARD_REJECT"
+    return "CONTINUE"
+
+
+async def _explainable_scoring_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    GATE 3: Explainable Scoring
+    Calculate transparent credit score with RBI benchmarks and industry comparisons.
+    """
+    updates = await run_explainable_scoring_agent(state)
+    updates["agent_statuses"] = {
+        **state.get("agent_statuses", {}),
+        **updates.get("agent_statuses", {}),
+        "explainable_scoring": "DONE",
+    }
+    return updates
+
+
+async def _decision_engine_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    GATE 4: Final Decision Engine
+    
+    Calculate final approved amount as minimum of:
+    - Requested amount
+    - Score-based maximum (from decision band)
+    - Capacity-based maximum (from exposure limits)
+    
+    Create EnhancedFinalDecision with full explainability.
+    """
+    from models.schemas import EnhancedFinalDecision, AmountCalculation, DecisionGate
+    
+    logs: List[Dict[str, Any]] = []
+    agent = "DECISION_ENGINE"
+    
+    logs.append(_log(agent, "Running 4-gate decision engine..."))
+    
+    # Gather inputs from previous gates
+    compliance_result = state.get("compliance_result", {})
+    capacity_result = state.get("capacity_result", {})
+    scorecard_result = state.get("scorecard_result", {})
+    
+    loan_amount_requested = state.get("loan_amount_requested", 0.0)
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # GATE 1: Compliance (already checked, but document here)
+    # ═══════════════════════════════════════════════════════════════════════
+    gate1_pass = not compliance_result.get("hard_reject", False)
+    gate1_reason = "All compliance checks passed" if gate1_pass else compliance_result.get("hard_reject_reason", "")
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # GATE 2: Capacity (already checked, but document here)
+    # ═══════════════════════════════════════════════════════════════════════
+    gate2_pass = capacity_result.get("can_lend", True)
+    gate2_reason = capacity_result.get("capacity_remarks", "") if gate2_pass else "Exposure limits breached"
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # GATE 3: Credit Score Decision Band
+    # ═══════════════════════════════════════════════════════════════════════
+    final_score = scorecard_result.get("final_score", 0.0)
+    decision_band = scorecard_result.get("decision_band", "REJECT")
+    
+    # Map decision band to score-based max amount multiplier
+    score_based_multipliers = {
+        "APPROVE": 1.0,  # Full amount
+        "REFER_TO_COMMITTEE": 0.75,  # 75% of requested
+        "CONDITIONAL_APPROVE": 0.50,  # 50% of requested
+        "REJECT": 0.0,
+        "HARD_REJECT": 0.0,
+    }
+    
+    score_multiplier = score_based_multipliers.get(decision_band, 0.0)
+    score_based_max = loan_amount_requested * score_multiplier
+    gate3_reason = f"Score {final_score:.1f}/100 → {decision_band} → {score_multiplier*100:.0f}% of requested amount"
+    
+    logs.append(_log(agent, f"Gate 3 - Score: {final_score:.1f} → Decision Band: {decision_band}"))
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # GATE 4: Amount Calculation
+    # ═══════════════════════════════════════════════════════════════════════
+    capacity_max = capacity_result.get("suggested_max_amount", loan_amount_requested)
+    
+    # Final amount is minimum of all constraints
+    final_approved_amount = min(loan_amount_requested, score_based_max, capacity_max)
+    
+    # Determine which constraint was binding
+    if final_approved_amount == 0:
+        binding_constraint = "Rejected due to compliance/capacity/score"
+        final_decision = "REJECT"
+    elif final_approved_amount == capacity_max < score_based_max:
+        binding_constraint = f"Capacity Limit (₹{capacity_max:,.0f})"
+        final_decision = decision_band
+    elif final_approved_amount == score_based_max < loan_amount_requested:
+        binding_constraint = f"Score-Based Limit ({decision_band})"
+        final_decision = decision_band
+    else:
+        binding_constraint = "None - Full amount approved"
+        final_decision = "APPROVE"
+    
+    gate4_reason = f"Final amount: min(Requested: ₹{loan_amount_requested:,.0f}, Score-based: ₹{score_based_max:,.0f}, Capacity: ₹{capacity_max:,.0f}) = ₹{final_approved_amount:,.0f}"
+    
+    logs.append(_log(agent, gate4_reason))
+    logs.append(_log(agent, f"Binding constraint: {binding_constraint}"))
+    logs.append(_log(agent, f"Final decision: {final_decision} for ₹{final_approved_amount:,.0f}", level="SUCCESS"))
+    
+    # Create EnhancedFinalDecision
+    enhanced_decision = EnhancedFinalDecision(
+        gate_1_compliance=DecisionGate(
+            gate_name="Gate 1: Compliance",
+            passed=gate1_pass,
+            reason=gate1_reason
+        ),
+        gate_2_capacity=DecisionGate(
+            gate_name="Gate 2: Bank Capacity",
+            passed=gate2_pass,
+            reason=gate2_reason
+        ),
+        gate_3_score=DecisionGate(
+            gate_name="Gate 3: Credit Score",
+            passed=True,  # Always passes if we reach here
+            reason=gate3_reason,
+            score_value=final_score,
+            decision_band=decision_band
+        ),
+        gate_4_amount=AmountCalculation(
+            requested_amount=loan_amount_requested,
+            score_based_max=score_based_max,
+            capacity_based_max=capacity_max,
+            approved_amount=final_approved_amount,
+            binding_constraint=binding_constraint,
+            calculation_rationale=gate4_reason
+        ),
+        final_decision=final_decision,
+        approved_amount=final_approved_amount,
+        interest_rate_pct=capacity_result.get("final_interest_rate_pct", 0.0) if final_approved_amount > 0 else 0.0,
+        decision_summary=f"{final_decision}: ₹{final_approved_amount:,.0f} approved at {capacity_result.get('final_interest_rate_pct', 0.0):.2f}% p.a."
+    )
+    
+    return {
+        "enhanced_final_decision": enhanced_decision.model_dump(),
+        "final_decision": final_decision,
+        "approved_amount": final_approved_amount,
+        "logs": logs,
+        "agent_statuses": {
+            **state.get("agent_statuses", {}),
+            "decision_engine": "DONE",
+        }
+    }
+
+
+async def _scorer_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    updates = await run_scorer_agent(state)
+    updates["agent_statuses"] = {
+        **state.get("agent_statuses", {}),
+        **updates.get("agent_statuses", {}),
+        "scorer": "DONE",
+    }
+    return updates
+
+
+async def _compliance_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compliance Agent Node - Runs all Indian regulatory checks.
+    
+    If hard reject is triggered, sets state to skip scoring.
+    """
+    updates = await run_compliance_agent(state)
+    updates["agent_statuses"] = {
+        **state.get("agent_statuses", {}),
+        **updates.get("agent_statuses", {}),
+        "compliance": "DONE",
+    }
+    return updates
+
+
+def _check_compliance_result(state: Dict[str, Any]) -> str:
+    """
+    Conditional edge for compliance checks.
+    
+    GATE 1: Compliance Check
+    If hard reject, skip all scoring/capacity checks and go directly to CAM with rejection.
+    """
+    compliance_result = state.get("compliance_result", {})
+    hard_reject = compliance_result.get("hard_reject", False)
+    
+    if hard_reject:
+        return "HARD_REJECT"
+    return "CONTINUE"
+
+
 async def _cam_node(state: Dict[str, Any]) -> Dict[str, Any]:
     updates = await run_cam_generator(state)
     updates["agent_statuses"] = {
@@ -485,19 +764,37 @@ async def _cam_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # ─── Graph Construction ───────────────────────────────────────────────────────
 
 def build_graph() -> Any:
-    """Build and compile the LangGraph StateGraph."""
+    """
+    Build and compile the LangGraph StateGraph with 4-gate decision logic.
+    
+    Pipeline Flow:
+    1. Forgery Check (Gateway)
+    2. Parallel Ingest + Research
+    3. Arbitration Check (if conflict detected)
+    4. Enrichment (RCU, CIBIL, MCA, FOR, WC, NTS)
+    5. GATE 1: Compliance (Hard reject → CAM | Pass → Continue)
+    6. GATE 2: Bank Capacity (Can't lend → CAM | Can lend → Continue)
+    7. GATE 3: Explainable Scoring (Transparent scorecard with RBI benchmarks)
+    8. GATE 4: Decision Engine (Calculate final amount with 4-gate explainability)
+    9. CAM Generator (Final report)
+    """
     workflow = StateGraph(dict)
 
+    # Add all nodes
     workflow.add_node("forgery_check", _forgery_check_node)
     workflow.add_node("parallel_ingest_research", _parallel_node)
     workflow.add_node("arbitration_check", _arbitration_check_node)
     workflow.add_node("enrichment", _enrichment_node)
-    workflow.add_node("scorer", _scorer_node)
+    workflow.add_node("compliance", _compliance_node)
+    workflow.add_node("bank_capacity", _bank_capacity_node)
+    workflow.add_node("explainable_scoring", _explainable_scoring_node)
+    workflow.add_node("decision_engine", _decision_engine_node)
     workflow.add_node("cam_generator", _cam_node)
 
+    # Entry point
     workflow.set_entry_point("forgery_check")
     
-    # Conditional edge for forgery screening
+    # Flow: Forgery → Parallel Ingest/Research
     workflow.add_conditional_edges(
         "forgery_check",
         _check_forgery_result,
@@ -507,10 +804,34 @@ def build_graph() -> Any:
         }
     )
     
+    # Flow: Parallel → Arbitration → Enrichment → GATE 1 (Compliance)
     workflow.add_edge("parallel_ingest_research", "arbitration_check")
     workflow.add_edge("arbitration_check", "enrichment")
-    workflow.add_edge("enrichment", "scorer")
-    workflow.add_edge("scorer", "cam_generator")
+    workflow.add_edge("enrichment", "compliance")
+    
+    # GATE 1: Compliance Check
+    workflow.add_conditional_edges(
+        "compliance",
+        _check_compliance_result,
+        {
+            "HARD_REJECT": "cam_generator",  # Skip capacity/scoring if compliance hard rejects
+            "CONTINUE": "bank_capacity"
+        }
+    )
+    
+    # GATE 2: Bank Capacity Check
+    workflow.add_conditional_edges(
+        "bank_capacity",
+        _check_capacity_result,
+        {
+            "HARD_REJECT": "cam_generator",  # Skip scoring if bank can't lend
+            "CONTINUE": "explainable_scoring"
+        }
+    )
+    
+    # GATE 3 & 4: Scoring → Decision Engine → CAM
+    workflow.add_edge("explainable_scoring", "decision_engine")
+    workflow.add_edge("decision_engine", "cam_generator")
     workflow.add_edge("cam_generator", END)
 
     return workflow.compile()

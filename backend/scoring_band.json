@@ -1,0 +1,44 @@
+{
+  "metadata": {
+    "source": "Credit underwriting heuristic bands",
+    "note": "Used for absolute financial strength scoring"
+  },
+
+  "dscr": {
+    "green": 1.5,
+    "amber": 1.2
+  },
+
+  "current_ratio": {
+    "green": 1.5,
+    "amber": 1.2
+  },
+
+  "debt_to_equity": {
+    "green": 1.0,
+    "amber": 2.0,
+    "inverse": true
+  },
+
+  "interest_coverage_ratio": {
+    "green": 3.0,
+    "amber": 1.5
+  },
+
+  "ebitda_margin": {
+    "green": 18,
+    "amber": 10
+  },
+
+  "roce": {
+    "green": 20,
+    "amber": 12
+  },
+
+  "wc_days": {
+    "green": 45,
+    "amber": 90,
+    "inverse": true
+  }
+
+}

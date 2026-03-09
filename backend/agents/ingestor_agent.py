@@ -1,7 +1,7 @@
 """
 Agent 1 — Ingestor Agent
 Parses uploaded financial documents, runs GST reconciliation,
-and extracts structured financial data using Claude.
+and extracts structured financial data using Gemini.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List
 
-from anthropic import Anthropic
+import google.generativeai as genai
 
 from tools.gst_analyser import analyse_gst_documents
 from tools.pdf_parser import format_documents_for_llm
@@ -29,19 +29,23 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
     }
 
 
-def _call_claude(prompt: str, max_tokens: int = 4096) -> str:
-    """Call Claude claude-sonnet-4-20250514 and return the raw response text."""
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
+def _call_gemini(prompt: str, max_tokens: int = 4096) -> str:
+    """Call Gemini API and return the raw response text."""
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=0.7,
+        )
     )
-    return message.content[0].text
+    return response.text
 
 
 def _extract_json(text: str) -> Dict[str, Any]:
-    """Extract the first JSON object found in Claude's response."""
+    """Extract the first JSON object found in Gemini's response."""
     # Try direct parse first
     try:
         return json.loads(text.strip())
@@ -243,7 +247,7 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        raw_response = _call_claude(prompt)
+        raw_response = _call_gemini(prompt)
         logs.append(_log(agent, "LLM extraction complete. Parsing JSON response..."))
         extracted = _extract_json(raw_response)
 
@@ -251,7 +255,7 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             logs.append(_log(agent, "JSON parse failed — using defaults.", level="WARN"))
             extracted = _default_financials()
     except Exception as exc:
-        logs.append(_log(agent, f"Claude API error: {exc}", level="ERROR"))
+        logs.append(_log(agent, f"Gemini API error: {exc}", level="ERROR"))
         extracted = _default_financials()
 
     # Ensure company name is populated

@@ -5,6 +5,7 @@ import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
+import { Upload, FileText, CheckCircle2, Building2, IndianRupee, Layers } from 'lucide-react'
 
 const API = '/api'
 
@@ -47,24 +48,52 @@ function DropZone({ meta, onFile, file }) {
   return (
     <div
       {...getRootProps()}
-      className={`relative rounded-xl border-2 border-dashed p-5 cursor-pointer transition-all
-        ${isDragActive ? 'border-[#00d4aa] bg-[#00d4aa]/5' : file ? 'border-[#00d4aa]/40 bg-[#00d4aa]/5' : 'border-[#1a2530] hover:border-[#4a6070] bg-[#0a0f12]'}`}
+      className={`relative rounded-xl border-2 border-dashed p-5 cursor-pointer transition-all duration-300 group overflow-hidden
+        ${isDragActive 
+          ? 'border-[var(--accent)] scale-105' 
+          : file 
+          ? 'border-[var(--accent)] bg-[var(--accent)]/5 hover:bg-[var(--accent)]/8' 
+          : 'border-[var(--border)] hover:border-[var(--accent)] hover:bg-[var(--surface-elevated)]'
+        }`}
+      style={{ background: file ? 'var(--surface-elevated)' : 'var(--surface)' }}
     >
       <input {...getInputProps()} />
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">{meta.icon}</span>
+      <div className="flex items-center gap-4 relative z-10">
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl transition-all duration-300 ${file ? 'scale-110' : 'group-hover:scale-110'}`}
+             style={{ background: file ? 'var(--accent)20' : 'var(--surface-elevated)' }}>
+          {file ? <CheckCircle2 size={24} style={{ color: 'var(--accent)' }} /> : <span>{meta.icon}</span>}
+        </div>
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-[#e8f0f5]">{meta.label}</p>
+          <p className="text-sm font-semibold mb-1" style={{ color: 'var(--text)' }}>
+            {meta.label}
+          </p>
           {file ? (
-            <p className="text-[11px] text-[#00d4aa] font-mono truncate mt-0.5">{file.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-mono truncate" style={{ color: 'var(--accent)' }}>
+                {file.name}
+              </p>
+              <span className="text-xs px-2 py-0.5 rounded font-mono" 
+                    style={{ background: 'var(--accent)15', color: 'var(--accent)' }}>
+                {(file.size / 1024).toFixed(1)} KB
+              </span>
+            </div>
           ) : (
-            <p className="text-[11px] text-[#4a6070] mt-0.5">
-              {isDragActive ? 'Drop here...' : 'Drag & drop or click to upload'}
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>
+              {isDragActive ? 'Drop here...' : 'Drag & drop or click to browse'}
             </p>
           )}
         </div>
-        {file && <span className="text-[#00d4aa] text-lg">✓</span>}
+        {file && (
+          <div className="w-8 h-8 rounded-full flex items-center justify-center animate-scale-in"
+               style={{ background: 'var(--accent)', color: 'white' }}>
+            ✓
+          </div>
+        )}
       </div>
+      {!file && (
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-[var(--accent)] to-transparent opacity-0 group-hover:opacity-5 transition-opacity"
+             style={{ transform: 'translateX(-100%)' }}></div>
+      )}
     </div>
   )
 }
@@ -121,25 +150,49 @@ export default function NewAppraisal() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-8 py-8 animate-fade-in">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="font-syne font-bold text-2xl text-[#e8f0f5]">New Credit Appraisal</h1>
-        <p className="text-[#4a6070] text-sm mt-1">
-          Upload financial documents and let the AI engine generate a full CAM in minutes.
-        </p>
+    <div className="max-w-5xl mx-auto px-8 py-10">
+      {/* Enhanced Header */}
+      <div className="mb-10 animate-slide-up">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center" 
+               style={{ background: 'linear-gradient(135deg, var(--accent), var(--accent-dark))' }}>
+            <FileText size={24} color="white" strokeWidth={2.5} />
+          </div>
+          <div>
+            <h1 className="font-syne font-bold text-3xl" style={{ color: 'var(--text)' }}>
+              New Credit Appraisal
+            </h1>
+            <p className="text-sm mt-0.5" style={{ color: 'var(--muted)' }}>
+              AI-powered analysis • Sub-30 minute turnaround • Bank-grade compliance
+            </p>
+          </div>
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-8">
+      <form onSubmit={handleSubmit} className="space-y-6">
         {/* Section 1: Company Details */}
-        <div className="card p-6">
-          <h2 className="font-syne font-semibold text-[#e8f0f5] mb-5 flex items-center gap-2">
-            <span className="w-6 h-6 rounded-full bg-[#00d4aa]/20 text-[#00d4aa] text-xs flex items-center justify-center font-mono font-bold">1</span>
-            Company Details
-          </h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-xs text-[#4a6070] mb-1.5 uppercase tracking-wider">Company Name *</label>
+        <div className="card p-8 animate-scale-in" style={{ animationDelay: '100ms' }}>
+          <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                 style={{ background: 'var(--accent)20', color: 'var(--accent)' }}>
+              1
+            </div>
+            <div>
+              <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                Company Information
+              </h2>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                Basic details about the applicant entity
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-2 gap-5">
+            <div className="col-span-2 input-group">
+              <label className="input-label flex items-center gap-2">
+                <Building2 size={14} style={{ color: 'var(--accent)' }} />
+                Company Name *
+              </label>
               <input
                 className="input-field"
                 name="company_name"
@@ -149,8 +202,11 @@ export default function NewAppraisal() {
                 required
               />
             </div>
-            <div>
-              <label className="block text-xs text-[#4a6070] mb-1.5 uppercase tracking-wider">Sector *</label>
+            <div className="input-group">
+              <label className="input-label flex items-center gap-2">
+                <Layers size={14} style={{ color: 'var(--accent)' }} />
+                Sector *
+              </label>
               <select
                 className="input-field"
                 name="sector"
@@ -162,9 +218,10 @@ export default function NewAppraisal() {
                 {SECTORS.map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-xs text-[#4a6070] mb-1.5 uppercase tracking-wider">
-                Loan Amount Requested (Rs. Crore)
+            <div className="input-group">
+              <label className="input-label flex items-center gap-2">
+                <IndianRupee size={14} style={{ color: 'var(--accent)' }} />
+                Loan Amount Requested (₹ Crore)
               </label>
               <input
                 className="input-field font-mono"
@@ -176,87 +233,117 @@ export default function NewAppraisal() {
                 onChange={handleChange}
                 placeholder="e.g. 15.00"
               />
+            </div>          <div className="col-span-2 input-group">
+              <label className="input-label">Qualitative Notes (Optional)</label>
+              <textarea
+                className="input-field"
+                name="qualitative_notes"
+                value={form.qualitative_notes}
+                onChange={handleChange}
+                placeholder="Add any special instructions, context, or observations..."
+                rows="3"
+              />
             </div>
           </div>
         </div>
 
         {/* Section 2: Document Upload */}
-        <div className="card p-6">
-          <h2 className="font-syne font-semibold text-[#e8f0f5] mb-2 flex items-center gap-2">
-            <span className="w-6 h-6 rounded-full bg-[#00d4aa]/20 text-[#00d4aa] text-xs flex items-center justify-center font-mono font-bold">2</span>
-            Financial Documents
-          </h2>
-          <p className="text-[11px] text-[#4a6070] mb-5 ml-8">
-            Upload up to 6 document types. PDF preferred. Max {50}MB per file.
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            {DOC_ZONES.map((meta) => (
-              <DropZone
-                key={meta.field}
-                meta={meta}
-                onFile={handleFile}
-                file={files[meta.field]}
-              />
+        <div className="card p-8 animate-scale-in" style={{ animationDelay: '200ms' }}>
+          <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                 style={{ background: 'var(--accent2)20', color: 'var(--accent2)' }}>
+              2
+            </div>
+            <div>
+              <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                Financial Documents
+              </h2>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                Upload financial statements • Max {50}MB per file • PDF preferred
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {DOC_ZONES.map((meta, idx) => (
+              <div key={meta.field} className="animate-slide-up" style={{ animationDelay: `${300 + idx * 50}ms` }}>
+                <DropZone
+                  meta={meta}
+                  onFile={handleFile}
+                  file={files[meta.field]}
+                />
+              </div>
             ))}
           </div>
-          <div className="mt-3 flex items-center gap-2">
-            <span className="text-[11px] text-[#4a6070]">
-              {Object.values(files).filter(Boolean).length} / {DOC_ZONES.length} files uploaded
-            </span>
-            {Object.values(files).filter(Boolean).length === 0 && (
-              <span className="text-[11px] text-[#ffd166]">
-                (Engine will work with available data — upload more for better accuracy)
-              </span>
+          <div className="mt-5 p-4 rounded-lg flex items-center justify-between" 
+               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+            <div className="flex items-center gap-3">
+              <Upload size={18} style={{ color: 'var(--accent)' }} />
+              <div>
+                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                  {Object.values(files).filter(Boolean).length} / {DOC_ZONES.length} files uploaded
+                </p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                  {Object.values(files).filter(Boolean).length === 0 
+                    ? 'Upload documents for better analysis accuracy'
+                    : 'Engine will process all uploaded documents'
+                  }
+                </p>
+              </div>
+            </div>
+            {Object.values(files).filter(Boolean).length > 0 && (
+              <div className="px-3 py-1.5 rounded-full font-mono text-xs font-semibold"
+                   style={{ background: 'var(--accent)15', color: 'var(--accent)' }}>
+                Ready
+              </div>
             )}
           </div>
         </div>
 
-        {/* Section 3: Qualitative Notes */}
-        <div className="card p-6">
-          <h2 className="font-syne font-semibold text-[#e8f0f5] mb-5 flex items-center gap-2">
-            <span className="w-6 h-6 rounded-full bg-[#00d4aa]/20 text-[#00d4aa] text-xs flex items-center justify-center font-mono font-bold">3</span>
-            Credit Officer Field Observations
-          </h2>
-          <textarea
-            className="input-field"
-            name="qualitative_notes"
-            value={form.qualitative_notes}
-            onChange={handleChange}
-            rows={5}
-            placeholder={`E.g. Factory found operating at 40% capacity. Management was evasive about the December dip in sales. Unit was visited on 15 Feb, equipment appears well-maintained but order book is thin for Q1.`}
-          />
-          <p className="text-[11px] text-[#4a6070] mt-2">
-            These notes will be factored into the AI scoring. A before/after comparison will be shown in results.
-          </p>
-        </div>
-
-        {/* Error */}
+        {/* Error Display */}
         {error && (
-          <div className="rounded-xl border border-[#ef476f]/30 bg-[#ef476f]/10 px-5 py-4">
-            <p className="text-sm text-[#ef476f]">⚠ {error}</p>
+          <div className="card p-5 border-2 animate-scale-in" 
+               style={{ borderColor: 'var(--danger)', background: 'var(--danger)10' }}>
+            <div className="flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
+                   style={{ background: 'var(--danger)20' }}>
+                <span style={{ color: 'var(--danger)' }}>!</span>
+              </div>
+              <div>
+                <p className="text-sm font-semibold mb-1" style={{ color: 'var(--danger)' }}>
+                  Submission Error
+                </p>
+                <p className="text-xs" style={{ color: 'var(--danger-dark)' }}>
+                  {error}
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Submit */}
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs text-[#4a6070]">
-              Estimated completion: <span className="text-[#00d4aa] font-mono">3–6 minutes</span>
-            </p>
-            <p className="text-[11px] text-[#2a3a4a] mt-0.5">vs industry average of 10–15 business days</p>
-          </div>
+        {/* Submit Button */}
+        <div className="flex items-center justify-between pt-6 animate-slide-up" style={{ animationDelay: '400ms' }}>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard')}
+            className="btn-secondary"
+          >
+            ← Cancel
+          </button>
           <button
             type="submit"
             disabled={loading}
-            className="btn-primary px-10 py-4 text-base"
+            className="btn-primary flex items-center gap-3 px-10"
           >
             {loading ? (
-              <span className="flex items-center gap-2">
-                <span className="w-4 h-4 border-2 border-[#020608]/30 border-t-[#020608] rounded-full animate-spin" />
-                Starting Engine...
-              </span>
+              <>
+                <div className="spinner"></div>
+                <span>Processing...</span>
+              </>
             ) : (
-              '⚡ Run Appraisal Engine'
+              <>
+                <span>Start Appraisal</span>
+                <span className="text-lg">→</span>
+              </>
             )}
           </button>
         </div>

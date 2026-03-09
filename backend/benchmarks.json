@@ -1,0 +1,219 @@
+{
+  "metadata": {
+    "source": "Indian listed companies financial data - BSE/NSE",
+    "collection_date": "FY 2023-24",
+    "note": "Industry benchmarks for financial ratio peer comparison"
+  },
+  "sectors": {
+    "textiles": {
+      "name": "Textiles & Apparel",
+      "nic_codes": ["13", "14"],
+      "companies_sampled": [
+        "Welspun India Ltd",
+        "Arvind Ltd",
+        "Raymond Ltd",
+        "Gokaldas Exports",
+        "Page Industries"
+      ],
+      "ratios": {
+        "debt_to_equity": {
+          "p25": 0.45,
+          "median": 0.85,
+          "p75": 1.60,
+          "higher_is_better": false
+        },
+        "current_ratio": {
+          "p25": 1.35,
+          "median": 1.75,
+          "p75": 2.20,
+          "higher_is_better": true
+        },
+        "interest_coverage_ratio": {
+          "p25": 2.10,
+          "median": 4.50,
+          "p75": 8.20,
+          "higher_is_better": true
+        },
+        "ebitda_margin": {
+          "p25": 8.50,
+          "median": 12.80,
+          "p75": 18.50,
+          "higher_is_better": true
+        },
+        "roce": {
+          "p25": 9.20,
+          "median": 15.40,
+          "p75": 22.30,
+          "higher_is_better": true
+        }
+      }
+    },
+    "pharmaceuticals": {
+      "name": "Pharmaceuticals",
+      "nic_codes": ["21"],
+      "companies_sampled": [
+        "Sun Pharma",
+        "Dr Reddy's",
+        "Cipla",
+        "Lupin",
+        "Divi's Labs",
+        "Biocon"
+      ],
+      "ratios": {
+        "debt_to_equity": {
+          "p25": 0.15,
+          "median": 0.40,
+          "p75": 0.85,
+          "higher_is_better": false
+        },
+        "current_ratio": {
+          "p25": 1.85,
+          "median": 2.45,
+          "p75": 3.20,
+          "higher_is_better": true
+        },
+        "interest_coverage_ratio": {
+          "p25": 5.80,
+          "median": 12.50,
+          "p75": 28.50,
+          "higher_is_better": true
+        },
+        "ebitda_margin": {
+          "p25": 16.50,
+          "median": 22.80,
+          "p75": 30.20,
+          "higher_is_better": true
+        },
+        "roce": {
+          "p25": 12.50,
+          "median": 18.90,
+          "p75": 26.70,
+          "higher_is_better": true
+        }
+      }
+    },
+    "it_services": {
+      "name": "IT Services & Software",
+      "nic_codes": ["62", "63"],
+      "companies_sampled": [
+        "TCS",
+        "Infosys",
+        "Wipro",
+        "HCL Tech",
+        "Tech Mahindra"
+      ],
+      "ratios": {
+        "debt_to_equity": {
+          "p25": 0.05,
+          "median": 0.12,
+          "p75": 0.30,
+          "higher_is_better": false
+        },
+        "current_ratio": {
+          "p25": 2.20,
+          "median": 2.85,
+          "p75": 3.50,
+          "higher_is_better": true
+        },
+        "interest_coverage_ratio": {
+          "p25": 18.50,
+          "median": 45.20,
+          "p75": 120.00,
+          "higher_is_better": true
+        },
+        "ebitda_margin": {
+          "p25": 18.20,
+          "median": 24.50,
+          "p75": 32.80,
+          "higher_is_better": true
+        },
+        "roce": {
+          "p25": 22.50,
+          "median": 30.80,
+          "p75": 42.50,
+          "higher_is_better": true
+        }
+      }
+    },
+    "wholesale_trade": {
+      "name": "Wholesale & Distribution",
+      "nic_codes": ["46"],
+      "companies_sampled": [
+        "Metro Brands",
+        "Hindustan Foods",
+        "Solar Industries"
+      ],
+      "ratios": {
+        "debt_to_equity": {
+          "p25": 0.55,
+          "median": 1.05,
+          "p75": 1.85,
+          "higher_is_better": false
+        },
+        "current_ratio": {
+          "p25": 1.15,
+          "median": 1.55,
+          "p75": 2.10,
+          "higher_is_better": true
+        },
+        "interest_coverage_ratio": {
+          "p25": 2.50,
+          "median": 5.20,
+          "p75": 9.80,
+          "higher_is_better": true
+        },
+        "ebitda_margin": {
+          "p25": 4.50,
+          "median": 7.80,
+          "p75": 12.50,
+          "higher_is_better": true
+        },
+        "roce": {
+          "p25": 11.50,
+          "median": 17.20,
+          "p75": 24.80,
+          "higher_is_better": true
+        }
+      }
+    },
+    "all_industry": {
+      "name": "All Industry Average (Fallback)",
+      "nic_codes": [],
+      "companies_sampled": [
+        "Represents cross-sector median from 150+ listed companies"
+      ],
+      "ratios": {
+        "debt_to_equity": {
+          "p25": 0.35,
+          "median": 0.75,
+          "p75": 1.50,
+          "higher_is_better": false
+        },
+        "current_ratio": {
+          "p25": 1.35,
+          "median": 1.85,
+          "p75": 2.50,
+          "higher_is_better": true
+        },
+        "interest_coverage_ratio": {
+          "p25": 2.80,
+          "median": 6.50,
+          "p75": 15.20,
+          "higher_is_better": true
+        },
+        "ebitda_margin": {
+          "p25": 9.50,
+          "median": 15.80,
+          "p75": 23.50,
+          "higher_is_better": true
+        },
+        "roce": {
+          "p25": 11.20,
+          "median": 17.50,
+          "p75": 26.80,
+          "higher_is_better": true
+        }
+      }
+    }
+  }
+}

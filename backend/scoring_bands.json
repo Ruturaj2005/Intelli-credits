@@ -1,0 +1,204 @@
+{
+  "metadata": {
+    "source": "Credit underwriting absolute scoring bands",
+    "note": "Used for ratios scored against fixed thresholds rather than peer comparison"
+  },
+  "dscr": {
+    "description": "Debt Service Coverage Ratio",
+    "bands": [
+      {
+        "min": null,
+        "max": 1.2,
+        "score": 0,
+        "flag": "RED",
+        "label": "Critical — Cannot service debt"
+      },
+      {
+        "min": 1.2,
+        "max": 1.5,
+        "score": 60,
+        "flag": "AMBER",
+        "label": "Marginal debt coverage"
+      },
+      {
+        "min": 1.5,
+        "max": 2.0,
+        "score": 85,
+        "flag": "GREEN",
+        "label": "Healthy debt coverage"
+      },
+      {
+        "min": 2.0,
+        "max": null,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Excellent debt service cushion"
+      }
+    ]
+  },
+  "current_ratio": {
+    "description": "Current Assets / Current Liabilities",
+    "bands": [
+      {
+        "min": null,
+        "max": 1.0,
+        "score": 0,
+        "flag": "RED",
+        "label": "Liquidity crisis — immediate support needed"
+      },
+      {
+        "min": 1.0,
+        "max": 1.25,
+        "score": 50,
+        "flag": "AMBER",
+        "label": "Tight liquidity — monitor closely"
+      },
+      {
+        "min": 1.25,
+        "max": 1.75,
+        "score": 80,
+        "flag": "GREEN",
+        "label": "Adequate liquidity buffer"
+      },
+      {
+        "min": 1.75,
+        "max": null,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Strong liquidity position"
+      }
+    ]
+  },
+  "for_ratio": {
+    "description": "Fund Outflow Ratio - Working capital health",
+    "bands": [
+      {
+        "min": null,
+        "max": 0.0,
+        "score": 0,
+        "flag": "RED",
+        "label": "Negative cash generation — red flag"
+      },
+      {
+        "min": 0.0,
+        "max": 0.25,
+        "score": 60,
+        "flag": "AMBER",
+        "label": "Weak working capital cycle"
+      },
+      {
+        "min": 0.25,
+        "max": 0.40,
+        "score": 85,
+        "flag": "GREEN",
+        "label": "Healthy operating efficiency"
+      },
+      {
+        "min": 0.40,
+        "max": null,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Excellent fund generation"
+      }
+    ]
+  },
+  "gst_mismatch": {
+    "description": "GST Mismatch % - Compliance quality indicator",
+    "bands": [
+      {
+        "min": null,
+        "max": 0.05,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Excellent GST compliance"
+      },
+      {
+        "min": 0.05,
+        "max": 0.15,
+        "score": 75,
+        "flag": "GREEN",
+        "label": "Acceptable mismatch level"
+      },
+      {
+        "min": 0.15,
+        "max": 0.30,
+        "score": 40,
+        "flag": "AMBER",
+        "label": "High mismatch — requires investigation"
+      },
+      {
+        "min": 0.30,
+        "max": null,
+        "score": 0,
+        "flag": "RED",
+        "label": "Severe compliance issues"
+      }
+    ]
+  },
+  "cash_deposit_ratio": {
+    "description": "Cash Deposits to Turnover — Cash intensity check",
+    "bands": [
+      {
+        "min": null,
+        "max": 0.05,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Normal cash deposit pattern"
+      },
+      {
+        "min": 0.05,
+        "max": 0.15,
+        "score": 70,
+        "flag": "AMBER",
+        "label": "Moderate cash usage"
+      },
+      {
+        "min": 0.15,
+        "max": 0.30,
+        "score": 40,
+        "flag": "AMBER",
+        "label": "High cash deposits — verify source"
+      },
+      {
+        "min": 0.30,
+        "max": null,
+        "score": 10,
+        "flag": "RED",
+        "label": "Excessive cash usage — money laundering risk"
+      }
+    ]
+  },
+  "cheque_bounces": {
+    "description": "Number of cheque bounces in last 12 months",
+    "bands": [
+      {
+        "min": null,
+        "max": 1,
+        "score": 100,
+        "flag": "GREEN",
+        "label": "Clean payment track record"
+      },
+      {
+        "min": 1,
+        "max": 3,
+        "score": 60,
+        "flag": "AMBER",
+        "label": "Minor payment issues detected"
+      },
+      {
+        "min": 3,
+        "max": 5,
+        "score": 25,
+        "flag": "RED",
+        "label": "Frequent payment defaults"
+      },
+      {
+        "min": 5,
+        "max": null,
+        "score": 0,
+        "flag": "RED",
+        "label": "Chronic payment failure"
+      }
+    ]
+  }
+}

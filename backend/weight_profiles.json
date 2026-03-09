@@ -1,0 +1,67 @@
+{
+  "metadata": {
+    "source": "Credit risk weighting framework",
+    "note": "Weights sum to 1.0 for each loan type"
+  },
+
+  "working_capital": {
+
+    "rationale": "Short-term liquidity lending focused on operating cycle",
+
+    "weights": {
+      "current_ratio": 0.25,
+      "wc_days": 0.20,
+      "debt_to_equity": 0.15,
+      "interest_coverage_ratio": 0.15,
+      "ebitda_margin": 0.10,
+      "roce": 0.10,
+      "dscr": 0.05
+    }
+  },
+
+  "term_loan": {
+
+    "rationale": "Medium-term lending for machinery, expansion, capex",
+
+    "weights": {
+      "dscr": 0.25,
+      "debt_to_equity": 0.20,
+      "interest_coverage_ratio": 0.15,
+      "current_ratio": 0.10,
+      "ebitda_margin": 0.10,
+      "roce": 0.10,
+      "wc_days": 0.10
+    }
+  },
+
+  "project_finance": {
+
+    "rationale": "Large infrastructure or real estate financing",
+
+    "weights": {
+      "dscr": 0.30,
+      "debt_to_equity": 0.25,
+      "interest_coverage_ratio": 0.15,
+      "ebitda_margin": 0.10,
+      "current_ratio": 0.08,
+      "roce": 0.07,
+      "wc_days": 0.05
+    }
+  },
+
+  "msme_unsecured": {
+
+    "rationale": "Higher-risk SME lending without strong collateral",
+
+    "weights": {
+      "dscr": 0.25,
+      "interest_coverage_ratio": 0.20,
+      "current_ratio": 0.20,
+      "debt_to_equity": 0.15,
+      "ebitda_margin": 0.10,
+      "roce": 0.05,
+      "wc_days": 0.05
+    }
+  }
+
+}

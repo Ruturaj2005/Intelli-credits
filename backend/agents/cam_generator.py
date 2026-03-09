@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from anthropic import Anthropic
+import google.generativeai as genai
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
@@ -32,8 +32,8 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
     }
 
 
-def _call_claude_for_summary(state: Dict[str, Any]) -> str:
-    """Ask Claude to write the Executive Summary section."""
+def _call_gemini_for_summary(state: Dict[str, Any]) -> str:
+    """Ask Gemini to write the Executive Summary section."""
     scores = state.get("five_cs_scores", {})
     research = state.get("research_findings", {})
     extracted = state.get("extracted_financials", {})
@@ -61,13 +61,17 @@ def _call_claude_for_summary(state: Dict[str, Any]) -> str:
         research_findings="\n".join(f"  - {f}" for f in key_findings) or "  None",
     )
     try:
-        client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-        msg = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=2048,
+                temperature=0.7,
+            )
         )
-        return msg.content[0].text
+        return response.text
     except Exception:
         return (
             f"This Credit Appraisal Memo summarises the credit assessment for "
@@ -419,9 +423,9 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
 
     logs.append(_log(agent, f"Generating Credit Appraisal Memo for '{company_name}'..."))
 
-    # ── Get executive summary from Claude ─────────────────────────────────────
-    logs.append(_log(agent, "Requesting Executive Summary from Claude..."))
-    exec_summary = _call_claude_for_summary(state)
+    # ── Get executive summary from Gemini ─────────────────────────────────────
+    logs.append(_log(agent, "Requesting Executive Summary from Gemini..."))
+    exec_summary = _call_gemini_for_summary(state)
     logs.append(_log(agent, "Executive Summary generated."))
 
     # ── Build Word document ───────────────────────────────────────────────────

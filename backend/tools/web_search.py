@@ -1,20 +1,20 @@
 """
-Tavily Web Search wrapper for the Research Agent.
+SurfApi Web Search wrapper for the Research Agent.
 Executes ordered searches and returns aggregated results.
 """
 from __future__ import annotations
 
 import os
 from typing import Any, Dict, List, Optional
+import httpx
 
-from tavily import TavilyClient
 
-
-def get_tavily_client() -> TavilyClient:
-    api_key = os.getenv("TAVILY_API_KEY", "")
+def get_surfapi_client() -> str:
+    """Get SurfApi API key from environment."""
+    api_key = os.getenv("SURFAPI_KEY", "")
     if not api_key:
-        raise ValueError("TAVILY_API_KEY environment variable is not set.")
-    return TavilyClient(api_key=api_key)
+        raise ValueError("SURFAPI_KEY environment variable is not set.")
+    return api_key
 
 
 def search_web(
@@ -24,26 +24,50 @@ def search_web(
     include_domains: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Execute a single Tavily web search.
+    Execute a single SurfApi web search.
 
     Returns:
         dict with keys: query, results (list of {title, url, content, score}), answer
     """
     try:
-        client = get_tavily_client()
-        kwargs: Dict[str, Any] = {
-            "query": query,
-            "max_results": max_results,
-            "search_depth": search_depth,
+        api_key = get_surfapi_client()
+        
+        # SurfApi endpoint
+        url = "https://api.surfapi.com/v1/search"
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
         }
+        
+        payload = {
+            "query": query,
+            "num_results": max_results,
+            "search_type": search_depth,
+        }
+        
         if include_domains:
-            kwargs["include_domains"] = include_domains
+            payload["include_domains"] = include_domains
 
-        response = client.search(**kwargs)
+        response = httpx.post(url, json=payload, headers=headers, timeout=30.0)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # Transform SurfApi response to match expected format
+        results = []
+        for item in data.get("results", [])[:max_results]:
+            results.append({
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "content": item.get("snippet", "") or item.get("content", ""),
+                "score": item.get("relevance_score", 0.0),
+            })
+        
         return {
             "query": query,
-            "results": response.get("results", []),
-            "answer": response.get("answer", ""),
+            "results": results,
+            "answer": data.get("summary", "") or data.get("answer", ""),
             "error": None,
         }
     except Exception as exc:

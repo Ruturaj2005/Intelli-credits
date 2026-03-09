@@ -1,0 +1,31 @@
+{
+  "metadata": {
+    "source": "Derived from RBI prudential lending norms",
+    "note": "Minimum financial health thresholds - breaching these triggers hard rejections"
+  },
+  "dscr": {
+    "floor": 1.2,
+    "source": "RBI Project Finance Guidelines 2023",
+    "breach_action": "HARD_REJECT"
+  },
+  "current_ratio": {
+    "floor": 1.0,
+    "source": "RBI Working Capital Lending Norms",
+    "breach_action": "HARD_REJECT"
+  },
+  "interest_coverage_ratio": {
+    "floor": 1.5,
+    "source": "RBI Credit Risk Assessment Standards",
+    "breach_action": "MANUAL_REVIEW"
+  },
+  "debt_to_equity": {
+    "ceiling": 3.5,
+    "source": "RBI Bank Policy Limit - High Leverage",
+    "breach_action": "MANUAL_REVIEW"
+  },
+  "company_age_years": {
+    "floor": 2,
+    "source": "Common bank SME lending policy",
+    "breach_action": "MANUAL_REVIEW"
+  }
+}
