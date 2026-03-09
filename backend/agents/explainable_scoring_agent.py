@@ -38,6 +38,7 @@ from models.schemas import (
     ScorecardResult,
     ComplianceResult,
 )
+from qualitative_scorer import calculate_qualitative_score
 
 logger = logging.getLogger(__name__)
 
@@ -593,7 +594,8 @@ class ExplainableScoringAgent:
         self,
         company_data: dict,
         compliance_result: ComplianceResult,
-        loan_type: LoanType = LoanType.TERM_LOAN
+        loan_type: LoanType = LoanType.TERM_LOAN,
+        qualitative_inputs: Optional[Dict[str, Any]] = None
     ) -> ScorecardResult:
         """
         Score the borrower transparently with full explainability.
@@ -602,6 +604,7 @@ class ExplainableScoringAgent:
             company_data: All financial and banking data
             compliance_result: Results from compliance agent
             loan_type: Type of loan for weight selection
+            qualitative_inputs: Optional primary due diligence inputs (factory visit + management interview)
         
         Returns:
             Complete scorecard with all ratios and decision
@@ -719,19 +722,48 @@ class ExplainableScoringAgent:
         # Step 5: Calculate base financial score
         base_financial_score = sum(r.weighted_score for r in ratio_scores)
         
-        # Step 6: Apply compliance deductions
+        # Step 6: Calculate qualitative score if provided
+        qualitative_breakdown = None
+        has_qualitative = False
+        
+        if qualitative_inputs and qualitative_inputs.get('factory_visit') and qualitative_inputs.get('management_interview'):
+            try:
+                gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+                qualitative_breakdown = calculate_qualitative_score(
+                    qualitative_inputs['factory_visit'],
+                    qualitative_inputs['management_interview'],
+                    sector,
+                    gemini_api_key
+                )
+                has_qualitative = True
+                logger.info(f"Qualitative score: {qualitative_breakdown['qualitative_score']:.1f}")
+            except Exception as e:
+                logger.error(f"Error calculating qualitative score: {e}")
+                qualitative_breakdown = None
+        
+        # Step 7: Combined financial and qualitative score
+        if has_qualitative:
+            # 70% financial,30% qualitative (as per RBI guidelines on comprehensive assessment)
+            combined_score = (base_financial_score * 0.70) + (qualitative_breakdown['qualitative_score'] * 0.30)
+            logger.info(f"Combined score: {base_financial_score:.1f} (70%) + {qualitative_breakdown['qualitative_score']:.1f} (30%) = {combined_score:.1f}")
+        else:
+            # If no qualitative inputs, financial score is 100% of assessment
+            combined_score = base_financial_score
+            logger.info(f"No qualitative inputs - using financial score only: {base_financial_score:.1f}")
+        
+        # Step 8: Apply compliance deductions
         compliance_red = compliance_result.total_red_flags
         compliance_amber = compliance_result.total_amber_flags
         compliance_deduction = (compliance_red * 5.0) + (compliance_amber * 2.0)
         
-        final_score = max(0.0, base_financial_score - compliance_deduction)
+        final_score = max(0.0, combined_score - compliance_deduction)
         
-        logger.info(f"Base score: {base_financial_score:.1f}, Compliance deduction: {compliance_deduction:.1f}, Final: {final_score:.1f}")
+        logger.info(f"Base score: {base_financial_score:.1f}, Qualitative: {qualitative_breakdown['qualitative_score'] if has_qualitative else 'N/A'}, Compliance deduction: {compliance_deduction:.1f}, Final: {final_score:.1f}")
         
-        # Step 7: Determine decision band
+        # Step 9: Determine decision band
         decision_band = self._determine_decision_band(final_score)
         
-        # Step 8: Create scorecard result
+        # Step 10: Create scorecard result
         scorecard = ScorecardResult(
             company_name=company_name,
             loan_type=loan_type,
@@ -749,6 +781,22 @@ class ExplainableScoringAgent:
             band_thresholds=self.decision_bands,
             band_rationale="Decision bands are bank-configurable internal thresholds. NOT RBI mandated."
         )
+        
+        # Add qualitative breakdown if available
+        if has_qualitative and qualitative_breakdown:
+            scorecard.qualitative_breakdown = {
+                "score": qualitative_breakdown["qualitative_score"],
+                "weight": "30% of final score",
+                "factory_score": qualitative_breakdown["factory_score"],
+                "management_score": qualitative_breakdown["management_score"],
+                "text_signals": qualitative_breakdown["text_analysis"],
+                "text_adjustment": qualitative_breakdown["text_adjustment_applied"],
+                "visit_conducted": qualitative_breakdown["visit_conducted"],
+                "interview_conducted": qualitative_breakdown["interview_conducted"],
+                "flag": qualitative_breakdown["flag"],
+                "five_c_mapping": qualitative_breakdown["five_c_mapping"],
+                "rbi_basis": qualitative_breakdown["rbi_basis"]
+            }
         
         return scorecard
     
@@ -840,9 +888,12 @@ async def run_explainable_scoring_agent(
         compliance_dict = state.get("compliance_result", {})
         compliance_result = ComplianceResult(**compliance_dict) if compliance_dict else ComplianceResult()
         
+        # Get qualitative inputs if provided
+        qualitative_inputs = state.get("qualitative_inputs", None)
+        
         # Create and run agent
         agent = ExplainableScoringAgent()
-        scorecard_result = await agent.process(company_data, compliance_result, loan_type)
+        scorecard_result = await agent.process(company_data, compliance_result, loan_type, qualitative_inputs)
         
         log(f"Scoring complete. Final score: {scorecard_result.final_score:.1f}/100", "SUCCESS")
         log(f"Decision band: {scorecard_result.decision_band}")

@@ -715,6 +715,7 @@ class ScorecardResult(BaseModel):
     compliance_red_flags: int = 0
     compliance_amber_flags: int = 0
     compliance_deduction: float = 0.0  # Total points deducted
+    qualitative_breakdown: Optional[Dict[str, Any]] = None  # Qualitative assessment details
     final_score: float = 0.0  # After compliance deductions (0-100)
     
     # Decision band (BANK CONFIGURABLE - NOT RBI MANDATED)

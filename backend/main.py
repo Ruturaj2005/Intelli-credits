@@ -229,20 +229,32 @@ async def start_appraisal(
     sector: str = Form(...),
     loan_amount: float = Form(0.0),
     qualitative_notes: str = Form(""),
+    qualitative_inputs: str = Form("{}"),
     annual_report: Optional[UploadFile] = File(None),
     gst_returns: Optional[UploadFile] = File(None),
     bank_statements: Optional[UploadFile] = File(None),
     itr: Optional[UploadFile] = File(None),
     legal_documents: Optional[UploadFile] = File(None),
     mca_filings: Optional[UploadFile] = File(None),
+    rating_report: Optional[UploadFile] = File(None),
+    cibil_report: Optional[UploadFile] = File(None),
+    shareholding: Optional[UploadFile] = File(None),
+    sanction_letters: Optional[UploadFile] = File(None),
+    audited_financials: Optional[UploadFile] = File(None),
 ):
     """
-    Accept multipart form with up to 6 document uploads.
+    Accept multipart form with up to 11 document uploads and qualitative assessments.
     Kick off the appraisal pipeline as a background task.
     """
     job_id = str(uuid.uuid4())
     job_dir = UPLOAD_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+
+    # Parse qualitative inputs
+    try:
+        qualitative_data = json.loads(qualitative_inputs) if qualitative_inputs else {}
+    except json.JSONDecodeError:
+        qualitative_data = {}
 
     # ── Save uploaded files ───────────────────────────────────────────────────
     upload_mapping = {
@@ -252,6 +264,11 @@ async def start_appraisal(
         "itr": itr,
         "legal_documents": legal_documents,
         "mca_filings": mca_filings,
+        "rating_report": rating_report,
+        "cibil_report": cibil_report,
+        "shareholding": shareholding,
+        "sanction_letters": sanction_letters,
+        "audited_financials": audited_financials,
     }
 
     documents: List[Dict[str, Any]] = []
@@ -300,6 +317,7 @@ async def start_appraisal(
         "sector": sector.strip(),
         "loan_amount_requested": loan_amount,
         "qualitative_notes": qualitative_notes.strip(),
+        "qualitative_inputs": qualitative_data,
         "documents": documents,
         "extracted_financials": {},
         "fraud_flags": [],
