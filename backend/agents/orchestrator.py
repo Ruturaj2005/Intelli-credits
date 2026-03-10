@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, date
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import google.generativeai as genai
 from langgraph.graph import StateGraph, END
@@ -70,6 +70,12 @@ def _extract_json(text: str) -> Dict[str, Any]:
         except json.JSONDecodeError:
             pass
     return {}
+
+
+# ─── Enrichment Configuration ─────────────────────────────────────────────────
+# Hard ceiling (seconds) for each parallel enrichment sub-task.
+# One stalled external API call cannot block the others or hold up the pipeline.
+_ENRICHMENT_TASK_TIMEOUT_SECS: int = 30
 
 
 # ─── Arbitration ──────────────────────────────────────────────────────────────
@@ -239,232 +245,318 @@ async def _arbitration_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ─── Enrichment Subtask Helpers ──────────────────────────────────────────────
+# Each function:
+#   • receives a read-only snapshot of state (no shared mutable object)
+#   • returns (data_dict, log_entries) so the caller can merge cleanly
+#   • is wrapped in asyncio.wait_for by the caller for per-task timeouts
+#
+# Sync-bound helpers (NTS, WC, FOR) are dispatched to a thread-pool via
+# asyncio.to_thread so they never block the event loop.
+
+async def _enrichment_task_nts(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """NTS sector health analysis — sync computation, runs in thread pool."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+    data: Dict[str, Any] = {}
+
+    sector = snap.get("sector_classification") or snap.get("sector", "")
+    if not sector:
+        logs.append(_log(agent, "Sector not specified — skipping NTS analysis", level="WARN"))
+        return data, logs
+
+    nts_result = await asyncio.to_thread(analyze_sector, sector)
+    data["nts_analysis"] = {
+        "sector_name": nts_result.sector_name,
+        "sector_status": nts_result.classification.status,
+        "risk_score": nts_result.classification.risk_score,
+        "risk_premium_bps": nts_result.classification.risk_premium_bps,
+        "key_strengths": nts_result.classification.key_strengths,
+        "key_concerns": nts_result.classification.key_concerns,
+        "recommendation": nts_result.overall_recommendation,
+    }
+    logs.append(
+        _log(
+            agent,
+            f"NTS: {nts_result.classification.status} | Risk Score: {nts_result.classification.risk_score}/100",
+            level="SUCCESS",
+        )
+    )
+    return data, logs
+
+
+async def _enrichment_task_wc(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Working capital analysis — sync computation, runs in thread pool."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+    data: Dict[str, Any] = {}
+
+    current_assets = snap.get("current_assets", 0)
+    current_liabilities = snap.get("current_liabilities", 0)
+    if current_assets <= 0 or current_liabilities <= 0:
+        logs.append(_log(agent, "Insufficient data for working capital analysis", level="WARN"))
+        return data, logs
+
+    wc_result = await asyncio.to_thread(
+        analyze_working_capital,
+        company_name=snap.get("company_name", ""),
+        current_assets=current_assets,
+        current_liabilities=current_liabilities,
+        cash_and_bank=snap.get("cash_and_bank", 0),
+        debtors=snap.get("debtors", 0),
+        inventory=snap.get("inventory", 0),
+        creditors=snap.get("creditors", 0),
+        short_term_loans=snap.get("short_term_loans", 0),
+        annual_revenue=snap.get("extracted_financials", {}).get("financials", {}).get("revenue_3yr", [0, 0, 0])[-1],
+        total_assets=snap.get("total_assets", 0),
+    )
+    data["working_capital_analysis"] = {
+        "working_capital": wc_result.working_capital,
+        "liquidity_status": wc_result.liquidity_status,
+        "liquidity_score": wc_result.liquidity_score,
+        "current_ratio": wc_result.ratios.current_ratio,
+        "quick_ratio": wc_result.ratios.quick_ratio,
+        "working_capital_adequacy": wc_result.working_capital_adequacy,
+        "risk_flags": wc_result.risk_flags,
+        "recommendations": wc_result.recommendations,
+    }
+    logs.append(
+        _log(
+            agent,
+            f"Working Capital: {wc_result.liquidity_status} | Score: {wc_result.liquidity_score}/100 "
+            f"| Current Ratio: {wc_result.ratios.current_ratio:.2f}",
+            level="SUCCESS",
+        )
+    )
+    return data, logs
+
+
+async def _enrichment_task_for(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Fixed Obligation Ratio (FOR) calculation — sync computation, runs in thread pool."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+    data: Dict[str, Any] = {}
+
+    existing_loans = snap.get("existing_loans", [])
+    financials = snap.get("extracted_financials", {}).get("financials", {})
+    revenue = financials.get("revenue_3yr", [0])[-1] if financials.get("revenue_3yr") else 0
+    if revenue <= 0:
+        logs.append(_log(agent, "Insufficient revenue data for FOR calculation", level="WARN"))
+        return data, logs
+
+    # Convert Cr → ₹, derive monthly income
+    gross_monthly_income = (revenue * 10_000_000) / 12
+    loan_details = [
+        LoanDetails(
+            outstanding_amount=loan.get("outstanding_amount", 0) * 10_000_000,
+            interest_rate=loan.get("interest_rate", 10.0),
+            remaining_tenure_months=loan.get("remaining_tenure_months", 60),
+        )
+        for loan in existing_loans
+        if loan.get("emi", 0) > 0
+    ]
+    proposed_loan = snap.get("loan_amount_requested", 0) * 10_000_000
+
+    for_result = await asyncio.to_thread(
+        calculate_for,
+        gross_monthly_income=gross_monthly_income,
+        existing_loans=loan_details if loan_details else None,
+        proposed_loan_amount=proposed_loan if proposed_loan > 0 else None,
+        proposed_tenure=60,
+        proposed_interest_rate=10.5,
+    )
+    data["for_analysis"] = {
+        "for_ratio": for_result.for_ratio,
+        "for_status": for_result.for_status,
+        "total_monthly_obligation": for_result.monthly_obligation,
+        "gross_monthly_income": for_result.income_used,
+        "recommendation": for_result.recommendation,
+        "risk_level": for_result.risk_level,
+    }
+    logs.append(
+        _log(
+            agent,
+            f"FOR Ratio: {for_result.for_ratio:.1f}% | Status: {for_result.for_status}",
+            level="SUCCESS" if for_result.for_ratio < 50 else "WARN",
+        )
+    )
+    return data, logs
+
+
+async def _enrichment_task_cibil(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """CIBIL enhanced credit bureau check — async I/O-bound."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+    data: Dict[str, Any] = {}
+
+    cin = snap.get("cin", "")
+    promoter_details = snap.get("promoter_details", [])
+    if not cin or not promoter_details:
+        logs.append(
+            _log(agent, "Insufficient data for CIBIL check (need CIN and promoter details)", level="WARN")
+        )
+        return data, logs
+
+    promoter_names = [p.get("name", "") for p in promoter_details]
+    promoter_pans = [p.get("pan", "") for p in promoter_details if p.get("pan")]
+    cibil_res = await get_cibil_score_enhanced(
+        company_name=snap.get("company_name", ""),
+        cin=cin,
+        promoter_names=promoter_names,
+        promoter_pans=promoter_pans if promoter_pans else None,
+        use_mock=True,
+        mock_scenario="good",
+    )
+    cibil_score = cibil_res.get("company_score", 0)
+    data["cibil_report"] = cibil_res
+    data["cibil_score"] = cibil_score
+    data["cibil_enhanced"] = cibil_res.get("cibil_enhanced")
+    logs.append(
+        _log(
+            agent,
+            f"CIBIL Enhanced: Score: {cibil_score} | Avg Director Score: {cibil_res.get('average_director_score', 0):.0f}",
+            level="SUCCESS" if cibil_score >= 650 else "WARN",
+        )
+    )
+    return data, logs
+
+
+async def _enrichment_task_mca(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """MCA master data & director network analysis — async I/O-bound."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+    data: Dict[str, Any] = {}
+
+    cin = snap.get("cin", "")
+    if not cin:
+        logs.append(_log(agent, "CIN not available — skipping MCA verification", level="WARN"))
+        return data, logs
+
+    mca_res = await run_mca_scraper(
+        cin=cin,
+        company_name=snap.get("company_name", ""),
+        use_mock=True,
+        mock_scenario="clean",
+    )
+    data["mca_report"] = mca_res
+    data["director_network"] = mca_res
+    data["mca_status"] = mca_res.get("company_status")
+    logs.append(
+        _log(
+            agent,
+            f"MCA: Status: {mca_res.get('company_status')} | Risk Level: {mca_res.get('network_risk_level')}",
+            level="SUCCESS" if mca_res.get("network_risk_level") != "HIGH" else "ERROR",
+        )
+    )
+    return data, logs
+
+
+async def _enrichment_task_rcu(
+    snap: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """RCU field verification — async I/O-bound."""
+    agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = []
+
+    rcu_updates = await run_rcu_verification_agent(snap)
+    rcu_status = rcu_updates.get("rcu_status", "UNKNOWN")
+    logs.append(
+        _log(
+            agent,
+            f"RCU: {rcu_status} | Score: {rcu_updates.get('rcu_verification', {}).get('overall_score', 0)}/100",
+            level="SUCCESS" if rcu_status == "POSITIVE" else "WARN",
+        )
+    )
+    # rcu_updates itself is the data dict (contains rcu_status, rcu_verification, etc.)
+    return rcu_updates, logs
+
+
 async def _enrichment_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Enrichment pipeline: Run all specialized verification tools.
-    - RCU verification
-    - CIBIL checks
-    - MCA verification
-    - FOR calculation
-    - Working capital analysis
-    - NTS sector analysis
+    Parallel enrichment pipeline — all 6 independent tools fire concurrently.
+
+    Dependency analysis
+    -------------------
+    Every sub-task reads exclusively from the incoming state snapshot and
+    writes to a distinct set of state keys.  There are zero cross-task data
+    dependencies, making full concurrency safe:
+
+      Task          Input keys read            Output keys written
+      ──────────────────────────────────────────────────────────────
+      NTS           sector / sector_classific.  nts_analysis
+      WorkingCap    current_assets / liabilit.  working_capital_analysis
+      FOR           existing_loans / revenue    for_analysis
+      CIBIL         cin / promoter_details       cibil_report, cibil_score
+      MCA           cin / company_name           mca_report, director_network
+      RCU           (full state snapshot)        rcu_status, rcu_verification
+
+    Implementation notes
+    --------------------
+    • asyncio.to_thread wraps sync-bound functions (NTS, WC, FOR) so they
+      run in a thread-pool and never block the event loop.
+    • asyncio.wait_for gives every task its own hard deadline
+      (_ENRICHMENT_TASK_TIMEOUT_SECS); a single slow API cannot stall others.
+    • All results are returned explicitly in the node's return dict — no
+      direct state mutation — ensuring LangGraph's state merge is the sole
+      source of truth.
     """
-    logs: List[Dict[str, Any]] = []
     agent = "ENRICHMENT"
+    logs: List[Dict[str, Any]] = [
+        _log(agent, "⚡ Launching 6 enrichment tasks in parallel (NTS · WC · FOR · CIBIL · MCA · RCU)...")
+    ]
 
-    logs.append(_log(agent, "Starting enrichment pipeline with specialized tools..."))
+    # Immutable snapshot so all coroutines share a stable, consistent view
+    # of the state without risking concurrent mutation.
+    snap = dict(state)
 
-    # ── Step 1: NTS Sector Analysis ────────────────────────────────────────
-    try:
-        logs.append(_log(agent, "Analyzing sector health (NTS)..."))
-        sector = state.get("sector_classification") or state.get("sector", "")
-        if sector:
-            nts_result = analyze_sector(sector)
-            state["nts_analysis"] = {
-                "sector_name": nts_result.sector_name,
-                "sector_status": nts_result.classification.status,
-                "risk_score": nts_result.classification.risk_score,
-                "risk_premium_bps": nts_result.classification.risk_premium_bps,
-                "key_strengths": nts_result.classification.key_strengths,
-                "key_concerns": nts_result.classification.key_concerns,
-                "recommendation": nts_result.overall_recommendation,
-            }
+    _timeout = _ENRICHMENT_TASK_TIMEOUT_SECS
+    task_definitions: List[Tuple[str, Any]] = [
+        ("NTS",          _enrichment_task_nts(snap)),
+        ("WorkingCap",   _enrichment_task_wc(snap)),
+        ("FOR",          _enrichment_task_for(snap)),
+        ("CIBIL",        _enrichment_task_cibil(snap)),
+        ("MCA",          _enrichment_task_mca(snap)),
+        ("RCU",          _enrichment_task_rcu(snap)),
+    ]
+
+    timed_coroutines = [
+        asyncio.wait_for(coro, timeout=_timeout)
+        for _, coro in task_definitions
+    ]
+
+    # gather with return_exceptions=True so a failure in one task never
+    # cancels the others — partial enrichment is better than none.
+    raw_results = await asyncio.gather(*timed_coroutines, return_exceptions=True)
+
+    merged_data: Dict[str, Any] = {}
+    for (task_name, _), result in zip(task_definitions, raw_results):
+        if isinstance(result, asyncio.TimeoutError):
             logs.append(
-                _log(
-                    agent,
-                    f"NTS Analysis: {nts_result.classification.status} | Risk Score: {nts_result.classification.risk_score}/100",
-                    level="SUCCESS",
-                )
+                _log(agent, f"{task_name} timed out after {_timeout}s — result omitted", level="ERROR")
             )
+        elif isinstance(result, Exception):
+            logs.append(_log(agent, f"{task_name} failed: {result}", level="ERROR"))
         else:
-            logs.append(_log(agent, "Sector not specified - skipping NTS analysis", level="WARN"))
-    except Exception as exc:
-        logs.append(_log(agent, f"NTS analysis error: {exc}", level="ERROR"))
+            task_data, task_logs = result
+            merged_data.update(task_data)
+            logs.extend(task_logs)
 
-    # ── Step 2: Working Capital Analysis ───────────────────────────────────
-    try:
-        logs.append(_log(agent, "Analyzing working capital position..."))
-        current_assets = state.get("current_assets", 0)
-        current_liabilities = state.get("current_liabilities", 0)
+    logs.append(_log(agent, "✅ Parallel enrichment pipeline complete.", level="SUCCESS"))
 
-        if current_assets > 0 and current_liabilities > 0:
-            wc_result = analyze_working_capital(
-                company_name=state.get("company_name", ""),
-                current_assets=current_assets,
-                current_liabilities=current_liabilities,
-                cash_and_bank=state.get("cash_and_bank", 0),
-                debtors=state.get("debtors", 0),
-                inventory=state.get("inventory", 0),
-                creditors=state.get("creditors", 0),
-                short_term_loans=state.get("short_term_loans", 0),
-                annual_revenue=state.get("extracted_financials", {}).get("financials", {}).get("revenue_3yr", [0, 0, 0])[-1],
-                total_assets=state.get("total_assets", 0),
-            )
-            state["working_capital_analysis"] = {
-                "working_capital": wc_result.working_capital,
-                "liquidity_status": wc_result.liquidity_status,
-                "liquidity_score": wc_result.liquidity_score,
-                "current_ratio": wc_result.ratios.current_ratio,
-                "quick_ratio": wc_result.ratios.quick_ratio,
-                "working_capital_adequacy": wc_result.working_capital_adequacy,
-                "risk_flags": wc_result.risk_flags,
-                "recommendations": wc_result.recommendations,
-            }
-            logs.append(
-                _log(
-                    agent,
-                    f"Working Capital: {wc_result.liquidity_status} | Score: {wc_result.liquidity_score}/100 | "
-                    f"Current Ratio: {wc_result.ratios.current_ratio:.2f}",
-                    level="SUCCESS",
-                )
-            )
-        else:
-            logs.append(_log(agent, "Insufficient data for working capital analysis", level="WARN"))
-    except Exception as exc:
-        logs.append(_log(agent, f"Working capital analysis error: {exc}", level="ERROR"))
-
-    # ── Step 3: FOR (Fixed Obligation Ratio) Calculation ───────────────────
-    try:
-        logs.append(_log(agent, "Calculating Fixed Obligation Ratio (FOR)..."))
-        existing_loans = state.get("existing_loans", [])
-        financials = state.get("extracted_financials", {}).get("financials", {})
-        revenue = financials.get("revenue_3yr", [0])[-1] if financials.get("revenue_3yr") else 0
-
-        if revenue > 0:
-            # Estimate monthly income
-            gross_monthly_income = (revenue * 10000000) / 12  # Convert Cr to rupees, then monthly
-
-            # Convert existing loans to LoanDetails format
-            loan_details = []
-            for loan in existing_loans:
-                if loan.get("emi", 0) > 0:
-                    loan_details.append(
-                        LoanDetails(
-                            outstanding_amount=loan.get("outstanding_amount", 0) * 10000000,
-                            interest_rate=loan.get("interest_rate", 10.0),
-                            remaining_tenure_months=loan.get("remaining_tenure_months", 60),
-                        )
-                    )
-
-            # Calculate FOR with proposed loan
-            proposed_loan = state.get("loan_amount_requested", 0) * 10000000  # Cr to rupees
-            for_result = calculate_for(
-                gross_monthly_income=gross_monthly_income,
-                existing_loans=loan_details if loan_details else None,
-                proposed_loan_amount=proposed_loan if proposed_loan > 0 else None,
-                proposed_tenure=60,  # Default 5 years
-                proposed_interest_rate=10.5,  # Default rate
-            )
-
-            state["for_analysis"] = {
-                "for_ratio": for_result.for_ratio,
-                "for_status": for_result.for_status,
-                "total_monthly_obligation": for_result.monthly_obligation,
-                "gross_monthly_income": for_result.income_used,
-                "recommendation": for_result.recommendation,
-                "risk_level": for_result.risk_level,
-            }
-            logs.append(
-                _log(
-                    agent,
-                    f"FOR Ratio: {for_result.for_ratio:.1f}% | Status: {for_result.for_status}",
-                    level="SUCCESS" if for_result.for_ratio < 50 else "WARN",
-                )
-            )
-        else:
-            logs.append(_log(agent, "Insufficient revenue data for FOR calculation", level="WARN"))
-    except Exception as exc:
-        logs.append(_log(agent, f"FOR calculation error: {exc}", level="ERROR"))
-
-    # ── Step 4: CIBIL Credit Bureau Check ──────────────────────────────────
-    try:
-        logs.append(_log(agent, "Fetching ENHANCED CIBIL credit report..."))
-        cin = state.get("cin", "")
-        promoter_details = state.get("promoter_details", [])
-
-        if cin and promoter_details:
-            promoter_names = [p.get("name", "") for p in promoter_details]
-            promoter_pans = [p.get("pan", "") for p in promoter_details if p.get("pan")]
-
-            cibil_res = await get_cibil_score_enhanced(
-                company_name=state.get("company_name", ""),
-                cin=cin,
-                promoter_names=promoter_names,
-                promoter_pans=promoter_pans if promoter_pans else None,
-                use_mock=True,
-                mock_scenario="good",
-            )
-
-            state["cibil_report"] = cibil_res
-            # Sync top-level score for scorer_agent
-            state["cibil_score"] = cibil_res.get("company_score", 0)
-            state["cibil_enhanced"] = cibil_res.get("cibil_enhanced")
-            
-            logs.append(
-                _log(
-                    agent,
-                    f"CIBIL Enhanced: Score: {state['cibil_score']} | "
-                    f"Avg Director Score: {cibil_res.get('average_director_score', 0):.0f}",
-                    level="SUCCESS" if state["cibil_score"] >= 650 else "WARN",
-                )
-            )
-        else:
-            logs.append(_log(agent, "Insufficient data for CIBIL check (need CIN and promoter details)", level="WARN"))
-    except Exception as exc:
-        logs.append(_log(agent, f"CIBIL check error: {exc}", level="ERROR"))
-
-    # ── Step 5: MCA (Ministry of Corporate Affairs) Verification ───────────
-    try:
-        logs.append(_log(agent, "Fetching MCA master data & network analysis..."))
-        cin = state.get("cin", "")
-
-        if cin:
-            # Use the new run_mca_scraper for integrated network analysis
-            mca_res = await run_mca_scraper(
-                cin=cin,
-                company_name=state.get("company_name", ""),
-                use_mock=True,
-                mock_scenario="clean",
-            )
-
-            state["mca_report"] = mca_res
-            # Pass director network to state for scorer_agent/SHAP
-            state["director_network"] = mca_res
-            
-            # Legacy compatibility for cam_generator if needed
-            state["mca_status"] = mca_res.get("company_status")
-            
-            logs.append(
-                _log(
-                    agent,
-                    f"MCA: Status: {mca_res.get('company_status')} | Risk Level: {mca_res.get('network_risk_level')}",
-                    level="SUCCESS" if mca_res.get('network_risk_level') != "HIGH" else "ERROR",
-                )
-            )
-        else:
-            logs.append(_log(agent, "CIN not available - skipping MCA verification", level="WARN"))
-    except Exception as exc:
-        logs.append(_log(agent, f"MCA verification error: {exc}", level="ERROR"))
-
-    # ── Step 6: RCU (Risk Containment Unit) Verification ───────────────────
-    try:
-        logs.append(_log(agent, "Running RCU field verification..."))
-        rcu_updates = await run_rcu_verification_agent(state)
-        state.update(rcu_updates)
-        rcu_status = rcu_updates.get("rcu_status", "UNKNOWN")
-        logs.append(
-            _log(
-                agent,
-                f"RCU Verification: {rcu_status} | Score: {rcu_updates.get('rcu_verification', {}).get('overall_score', 0)}/100",
-                level="SUCCESS" if rcu_status == "POSITIVE" else "WARN",
-            )
-        )
-    except Exception as exc:
-        logs.append(_log(agent, f"RCU verification error: {exc}", level="ERROR"))
-
-    logs.append(_log(agent, "Enrichment pipeline complete.", level="SUCCESS"))
-
+    # Return ALL enrichment data explicitly so LangGraph's state merge
+    # propagates every key — no silent state mutations.
     return {
+        **merged_data,
         "logs": logs,
         "agent_statuses": {**state.get("agent_statuses", {}), "enrichment": "DONE"},
     }
@@ -709,46 +801,6 @@ async def _decision_engine_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "decision_engine": "DONE",
         }
     }
-
-
-async def _scorer_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    updates = await run_scorer_agent(state)
-    updates["agent_statuses"] = {
-        **state.get("agent_statuses", {}),
-        **updates.get("agent_statuses", {}),
-        "scorer": "DONE",
-    }
-    return updates
-
-
-async def _compliance_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Compliance Agent Node - Runs all Indian regulatory checks.
-    
-    If hard reject is triggered, sets state to skip scoring.
-    """
-    updates = await run_compliance_agent(state)
-    updates["agent_statuses"] = {
-        **state.get("agent_statuses", {}),
-        **updates.get("agent_statuses", {}),
-        "compliance": "DONE",
-    }
-    return updates
-
-
-def _check_compliance_result(state: Dict[str, Any]) -> str:
-    """
-    Conditional edge for compliance checks.
-    
-    GATE 1: Compliance Check
-    If hard reject, skip all scoring/capacity checks and go directly to CAM with rejection.
-    """
-    compliance_result = state.get("compliance_result", {})
-    hard_reject = compliance_result.get("hard_reject", False)
-    
-    if hard_reject:
-        return "HARD_REJECT"
-    return "CONTINUE"
 
 
 async def _cam_node(state: Dict[str, Any]) -> Dict[str, Any]:
