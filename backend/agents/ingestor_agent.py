@@ -104,6 +104,107 @@ def _default_financials() -> Dict[str, Any]:
 
 # ─── Additional Red Flag Rules ────────────────────────────────────────────────
 
+def _filter_low_confidence_metrics(
+    financials: Dict[str, Any],
+    documents: List[Dict[str, Any]],
+    confidence_threshold: float = 0.7
+) -> Dict[str, Any]:
+    """
+    Filter financial metrics based on entity-level confidence scores.
+    
+    Metrics with confidence < threshold are flagged for manual review.
+    
+    Args:
+        financials: Extracted financial data
+        documents: Parsed documents with confidence info
+        confidence_threshold: Minimum acceptable confidence (default: 0.7)
+    
+    Returns:
+        Filtering summary with counts and flagged metrics
+    """
+    flagged_list = []
+    accepted_count = 0
+    total_count = 0
+    
+    # Aggregate all financial entities from documents
+    all_entities = {}
+    for doc in documents:
+        entities = doc.get("financial_entities", {})
+        if entities:
+            all_entities.update(entities)
+    
+    # Check each entity's confidence
+    for metric_name, metric_data in all_entities.items():
+        total_count += 1
+        
+        if isinstance(metric_data, dict):
+            entity_conf = metric_data.get("entity_confidence", 1.0)
+            
+            if entity_conf < confidence_threshold:
+                flagged_list.append({
+                    "metric": metric_name,
+                    "value": metric_data.get("value"),
+                    "confidence": round(entity_conf, 3),
+                    "reason": f"Confidence {entity_conf:.1%} below threshold {confidence_threshold:.0%}"
+                })
+            else:
+                accepted_count += 1
+    
+    return {
+        "total_count": total_count,
+        "accepted_count": accepted_count,
+        "filtered_count": len(flagged_list),
+        "flagged_count": len(flagged_list),
+        "flagged_list": flagged_list,
+    }
+
+
+def _compile_document_quality_summary(documents: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compile overall document quality statistics.
+    
+    Returns summary of confidence levels across all documents.
+    """
+    total_docs = len(documents)
+    high_confidence = 0  # >= 0.7
+    moderate_confidence = 0  # 0.5 - 0.7
+    low_confidence = 0  # < 0.5
+    manual_review_required = 0
+    
+    confidence_details = []
+    
+    for doc in documents:
+        conf = doc.get("overall_confidence", 1.0)
+        reliability = doc.get("reliability_score", "UNKNOWN")
+        status = doc.get("extraction_status", "UNKNOWN")
+        
+        confidence_details.append({
+            "file_name": doc.get("file_name", "unknown"),
+            "confidence": round(conf, 3),
+            "reliability": reliability,
+            "status": status,
+        })
+        
+        if conf >= 0.7:
+            high_confidence += 1
+        elif conf >= 0.5:
+            moderate_confidence += 1
+        else:
+            low_confidence += 1
+        
+        if doc.get("requires_manual_review"):
+            manual_review_required += 1
+    
+    return {
+        "total_documents": total_docs,
+        "high_confidence_count": high_confidence,
+        "moderate_confidence_count": moderate_confidence,
+        "low_confidence_count": low_confidence,
+        "manual_review_required": manual_review_required,
+        "document_details": confidence_details,
+    }
+
+
 def _apply_rule_based_flags(data: Dict[str, Any], loan_amount: float) -> List[str]:
     """Apply deterministic Indian banking rule flags on top of LLM output."""
     flags: List[str] = list(data.get("red_flags", []))
@@ -265,6 +366,45 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     # Inject GST result into extracted data (override LLM if tool found discrepancy)
     if gst_result.detected or not extracted.get("gst_vs_bank_discrepancy", {}).get("details"):
         extracted["gst_vs_bank_discrepancy"] = gst_result.to_dict()
+
+    # ── Step 3.5: Confidence-Based Metric Filtering ────────────────────────────
+    logs.append(_log(agent, "Filtering financial metrics by confidence..."))
+    
+    filtered_metrics = _filter_low_confidence_metrics(
+        extracted.get("financials", {}),
+        documents,
+        confidence_threshold=0.7
+    )
+    
+    if filtered_metrics["filtered_count"] > 0:
+        logs.append(
+            _log(
+                agent,
+                f"Filtered {filtered_metrics['filtered_count']} low-confidence metrics. "
+                f"Accepted: {filtered_metrics['accepted_count']}, "
+                f"Flagged: {filtered_metrics['flagged_count']}",
+                level="WARN"
+            )
+        )
+        extracted["confidence_filtering"] = {
+            "total_metrics": filtered_metrics["total_count"],
+            "accepted_metrics": filtered_metrics["accepted_count"],
+            "flagged_metrics": filtered_metrics["flagged_count"],
+            "flagged_list": filtered_metrics["flagged_list"],
+        }
+    
+    # Store document quality summary
+    doc_quality_summary = _compile_document_quality_summary(documents)
+    extracted["document_quality_summary"] = doc_quality_summary
+    
+    if doc_quality_summary["low_confidence_count"] > 0:
+        logs.append(
+            _log(
+                agent,
+                f"⚠ {doc_quality_summary['low_confidence_count']} document(s) have low extraction confidence",
+                level="WARN"
+            )
+        )
 
     # ── Step 4: Rule-based flag augmentation ──────────────────────────────────
     extracted["red_flags"] = _apply_rule_based_flags(extracted, loan_amount)

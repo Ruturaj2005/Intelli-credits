@@ -106,6 +106,68 @@ def parse_with_intelligence(
             doc_classification
         )
         
+        overall_confidence = confidence_result["overall_confidence"]
+        
+        # ── Retry Logic for Low Confidence ────────────────────────────────────────
+        if overall_confidence < 0.5 and use_advanced_pipeline:
+            logger.warning(
+                f"Low confidence detected ({overall_confidence:.1%}). "
+                f"Attempting retry with enhanced preprocessing..."
+            )
+            
+            try:
+                # Retry with higher DPI and alternative OCR
+                logger.info("Retry Stage 1: High-resolution preprocessing (600 DPI)...")
+                preprocessed_retry = preprocess_pdf_pages(file_path, dpi=600)
+                
+                if preprocessed_retry:
+                    logger.info("Retry Stage 2: Fallback OCR with Tesseract...")
+                    
+                    # Import Tesseract fallback
+                    from tools.document_intelligence.ocr_engine import extract_with_tesseract_fallback
+                    
+                    ocr_retry = extract_with_tesseract_fallback(preprocessed_retry, file_path)
+                    ocr_confidence_retry = ocr_retry.get("confidence", 0.0)
+                    
+                    # If retry improves confidence, use retry results
+                    if ocr_confidence_retry > ocr_confidence:
+                        logger.info(
+                            f"Retry improved confidence: {ocr_confidence:.1%} → {ocr_confidence_retry:.1%}. "
+                            f"Using retry results."
+                        )
+                        
+                        # Re-run pipeline stages with retry OCR data
+                        full_text = ocr_retry.get("full_text", "")
+                        ocr_tables = ocr_retry.get("tables", [])
+                        
+                        # Re-classify and extract
+                        doc_classification = classify_document(full_text, Path(file_path).name)
+                        detected_doc_type = doc_classification.get("document_type", doc_type)
+                        tables = extract_tables_advanced(file_path, ocr_tables, use_camelot=True)
+                        entities = extract_financial_entities(full_text, tables, detected_doc_type)
+                        normalized_entities = detect_and_normalize(entities, full_text)
+                        validation_report = validate_financial_data(normalized_entities, detected_doc_type)
+                        
+                        # Recalculate confidence
+                        confidence_result = calculate_confidence_scores(
+                            normalized_entities,
+                            ocr_confidence_retry,
+                            validation_report,
+                            doc_classification
+                        )
+                        overall_confidence = confidence_result["overall_confidence"]
+                        ocr_confidence = ocr_confidence_retry
+                        
+                        logger.info(f"Final confidence after retry: {overall_confidence:.1%}")
+                    else:
+                        logger.warning(
+                            f"Retry did not improve confidence ({ocr_confidence_retry:.1%} ≤ {ocr_confidence:.1%}). "
+                            f"Using original results."
+                        )
+            
+            except Exception as retry_error:
+                logger.error(f"Retry extraction failed: {retry_error}. Using original results.")
+        
         # Compile comprehensive result
         result = {
             "file_path": file_path,

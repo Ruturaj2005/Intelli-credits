@@ -343,3 +343,24 @@ def _fallback_ocr(images: List[np.ndarray], pdf_path: str) -> Dict[str, Any]:
             "total_pages": len(images),
             "source": pdf_path,
         }
+
+
+def extract_with_tesseract_fallback(
+    images: List[np.ndarray],
+    pdf_path: str = "",
+) -> Dict[str, Any]:
+    """
+    Extract text using Tesseract OCR as a fallback/retry mechanism.
+    
+    This function is called when PaddleOCR produces low confidence results
+    and we want to retry with an alternative OCR engine.
+    
+    Args:
+        images: List of preprocessed images (numpy arrays)
+        pdf_path: Original PDF path for reference
+    
+    Returns:
+        Dictionary containing extracted text and confidence scores
+    """
+    logger.info("Using Tesseract OCR for retry extraction")
+    return _fallback_ocr(images, pdf_path)

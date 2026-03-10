@@ -98,6 +98,78 @@ def _set_heading_style(paragraph, level: int = 1):
         run.font.color.rgb = RGBColor(0x4A, 0x60, 0x70)  # Muted
 
 
+def _format_data_quality_section(state: Dict[str, Any]) -> str:
+    """
+    Generate Data Quality & Extraction Confidence section content.
+    
+    Returns formatted text describing document quality and confidence metrics.
+    """
+    extracted = state.get("extracted_financials", {})
+    doc_quality = extracted.get("document_quality_summary", {})
+    confidence_filtering = extracted.get("confidence_filtering", {})
+    
+    lines = []
+    
+    # Overall document quality
+    total_docs = doc_quality.get("total_documents", 0)
+    high_conf = doc_quality.get("high_confidence_count", 0)
+    moderate_conf = doc_quality.get("moderate_confidence_count", 0)
+    low_conf = doc_quality.get("low_confidence_count", 0)
+    manual_review = doc_quality.get("manual_review_required", 0)
+    
+    lines.append(f"Total Documents Processed: {total_docs}")
+    lines.append(f"  • High Confidence (≥70%): {high_conf} documents")
+    lines.append(f"  • Moderate Confidence (50-70%): {moderate_conf} documents")
+    lines.append(f"  • Low Confidence (<50%): {low_conf} documents")
+    
+    if manual_review > 0:
+        lines.append(f"\n⚠ ALERT: {manual_review} document(s) require manual verification")
+    
+    # Document-level details
+    if doc_quality.get("document_details"):
+        lines.append("\nDocument Quality Breakdown:")
+        for doc_detail in doc_quality["document_details"]:
+            status_icon = "✓" if doc_detail["status"] == "ACCEPTED" else "⚠" if "WARNING" in doc_detail["status"] else "✗"
+            lines.append(
+                f"  {status_icon} {doc_detail['file_name']}: "
+                f"{doc_detail['confidence']:.1%} ({doc_detail['reliability']})"
+            )
+    
+    # Metric-level filtering
+    if confidence_filtering:
+        total_metrics = confidence_filtering.get("total_metrics", 0)
+        accepted = confidence_filtering.get("accepted_metrics", 0)
+        flagged = confidence_filtering.get("flagged_metrics", 0)
+        
+        lines.append(f"\nFinancial Metric Confidence Filtering:")
+        lines.append(f"  • Total Metrics Extracted: {total_metrics}")
+        lines.append(f"  • High Confidence Metrics: {accepted}")
+        lines.append(f"  • Low Confidence Metrics (Flagged): {flagged}")
+        
+        if flagged > 0:
+            lines.append("\n⚠ Low Confidence Metrics Requiring Verification:")
+            for flagged_item in confidence_filtering.get("flagged_list", [])[:10]:
+                lines.append(
+                    f"  • {flagged_item['metric']}: {flagged_item['confidence']:.1%} confidence - "
+                    f"Value: {flagged_item.get('value', 'N/A')}"
+                )
+    
+    # Overall assessment
+    if low_conf > 0 or (confidence_filtering and confidence_filtering.get("flagged_metrics", 0) > 0):
+        lines.append("\n" + "="*60)
+        lines.append("DATA QUALITY WARNING:")
+        lines.append(
+            "Some financial data was extracted with low confidence. "
+            "It is recommended that the credit officer manually verify the flagged metrics "
+            "against the original documents before making a final credit decision."
+        )
+        lines.append("="*60)
+    else:
+        lines.append("\n✓ All documents processed with acceptable confidence levels.")
+    
+    return "\n".join(lines)
+
+
 def _add_section_heading(doc: Document, text: str, level: int = 1):
     p = doc.add_heading(text, level=level)
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
@@ -250,6 +322,33 @@ def _build_financial_analysis(doc: Document, extracted: Dict[str, Any], loan_amo
         ["CFO", f"Rs. {fin.get('cash_flow_from_operations', 0):.2f} Cr", "> 0", "✅ Positive" if fin.get("cash_flow_from_operations", 0) > 0 else "❌ Negative"],
     ]
     _add_table(doc, ratio_headers, ratio_rows)
+
+
+def _build_data_quality_section(doc: Document, state: Dict[str, Any]):
+    """
+    Build Data Quality & Extraction Confidence section in CAM.
+    
+    Shows document quality metrics and confidence levels.
+    """
+    _add_section_heading(doc, "3.3 Data Quality & Extraction Confidence")
+    
+    quality_text = _format_data_quality_section(state)
+    
+    # Split into paragraphs and add with appropriate formatting
+    for line in quality_text.split("\n"):
+        if line.strip():
+            p = doc.add_paragraph(line)
+            
+            # Apply warning formatting for alert lines
+            if "ALERT" in line or "WARNING" in line:
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0xFF, 0x66, 0x00)  # Orange
+                    run.bold = True
+            elif "✓" in line or "All documents processed" in line:
+                for run in p.runs:
+                    run.font.color.rgb = RGBColor(0x00, 0x99, 0x00)  # Green
+    
+    doc.add_paragraph()
 
 
 def _build_five_cs(doc: Document, scores: Dict[str, Any]):
@@ -446,6 +545,7 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
     _build_executive_summary(doc, exec_summary)
     _build_company_background(doc, extracted)
     _build_financial_analysis(doc, extracted, state.get("loan_amount_requested", 0))
+    _build_data_quality_section(doc, state)  # NEW: Data Quality & Extraction Confidence
     _build_five_cs(doc, scores)
     _build_score_breakdown_table(doc, scores)
     _build_risk_flags(doc, extracted)

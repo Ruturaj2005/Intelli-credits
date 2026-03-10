@@ -291,10 +291,86 @@ async def start_appraisal(
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # Parse document
+        # Parse document using Advanced Document Intelligence Pipeline
         if upload_file.filename.lower().endswith(".pdf"):
-            from tools.pdf_parser import parse_financial_document
-            parsed = parse_financial_document(str(file_path), doc_type)
+            from tools.pdf_parser import parse_with_intelligence
+            
+            logger.info(f"Processing {safe_name} with advanced document intelligence pipeline")
+            parsed = parse_with_intelligence(
+                str(file_path), 
+                doc_type,
+                use_advanced_pipeline=True
+            )
+            
+            # ── Confidence Threshold Gating ──────────────────────────────────
+            overall_conf = parsed.get("overall_confidence", 1.0)
+            reliability = parsed.get("reliability_score", "UNKNOWN")
+            
+            # Determine document status based on confidence
+            if overall_conf >= 0.7:
+                parsed["extraction_status"] = "ACCEPTED"
+                parsed["confidence_warning"] = None
+                logger.info(f"✓ {safe_name}: High confidence ({overall_conf:.1%}, {reliability})")
+            
+            elif 0.5 <= overall_conf < 0.7:
+                parsed["extraction_status"] = "ACCEPTED_WITH_WARNING"
+                parsed["confidence_warning"] = (
+                    f"This document has moderate extraction confidence ({overall_conf:.0%}). "
+                    f"Some financial metrics may require manual verification."
+                )
+                logger.warning(
+                    f"⚠ {safe_name}: Moderate confidence ({overall_conf:.1%}, {reliability}) - "
+                    f"accepted with warning"
+                )
+                
+                # Send WebSocket notification
+                if connection_id:
+                    await manager.send_json(
+                        connection_id,
+                        {
+                            "type": "document_quality_warning",
+                            "document": safe_name,
+                            "confidence": round(overall_conf, 3),
+                            "reliability": reliability,
+                            "message": "Moderate quality - manual verification recommended"
+                        }
+                    )
+            
+            else:  # confidence < 0.5
+                parsed["extraction_status"] = "REQUIRES_REVIEW"
+                parsed["confidence_warning"] = (
+                    f"This document has low extraction confidence ({overall_conf:.0%}). "
+                    f"Manual data entry is strongly recommended."
+                )
+                parsed["requires_manual_review"] = True
+                
+                logger.error(
+                    f"✗ {safe_name}: Low confidence ({overall_conf:.1%}, {reliability}) - "
+                    f"flagged for manual review"
+                )
+                
+                # Send WebSocket alert
+                if connection_id:
+                    await manager.send_json(
+                        connection_id,
+                        {
+                            "type": "document_quality_alert",
+                            "document": safe_name,
+                            "confidence": round(overall_conf, 3),
+                            "reliability": reliability,
+                            "message": "Low quality detected - manual review required",
+                            "warnings": parsed.get("validation", {}).get("warnings", [])
+                        }
+                    )
+            
+            # Log validation issues if present
+            validation = parsed.get("validation", {})
+            if validation.get("flags"):
+                logger.warning(
+                    f"Validation flags for {safe_name}: "
+                    f"{len(validation['flags'])} issue(s) detected"
+                )
+        
         else:
             # For Excel/CSV/other, store raw path reference
             parsed = {
@@ -305,6 +381,10 @@ async def start_appraisal(
                 "tables_text": "",
                 "page_count": 0,
                 "error": None,
+                "overall_confidence": 0.0,
+                "reliability_score": "MANUAL",
+                "extraction_status": "MANUAL_ENTRY_REQUIRED",
+                "requires_manual_review": True,
             }
 
         documents.append(parsed)
