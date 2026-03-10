@@ -168,12 +168,11 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    yield
-"""Application lifespan manager - startup and shutdown."""
+    """Application lifespan manager - startup and shutdown."""
     await init_db()
     yield
     await close_db()
+
 # ─── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(

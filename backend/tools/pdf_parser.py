@@ -1,15 +1,154 @@
 """
 PDF parsing utilities using PyMuPDF and pdfplumber.
 Extracts text and tables from uploaded financial documents.
+
+Now includes advanced Document Intelligence Pipeline for messy/scanned documents.
 """
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List
 
 import fitz  # PyMuPDF
 import pdfplumber
+
+logger = logging.getLogger(__name__)
+
+
+# ─── Advanced Document Intelligence Pipeline ──────────────────────────────────
+
+def parse_with_intelligence(
+    file_path: str,
+    doc_type: str = "unknown",
+    use_advanced_pipeline: bool = True
+) -> Dict[str, Any]:
+    """
+    Parse financial document using advanced Document Intelligence Pipeline.
+    
+    This pipeline handles messy scanned documents, rotated pages, tables,
+    and extracts structured financial data with confidence scores.
+    
+    Args:
+        file_path: Path to PDF file
+        doc_type: Optional document type hint
+        use_advanced_pipeline: If True, uses full pipeline; if False, falls back to basic
+    
+    Returns:
+        Comprehensive document analysis with structured financial data
+    """
+    if not use_advanced_pipeline:
+        # Fallback to basic extraction
+        return parse_financial_document(file_path, doc_type)
+    
+    try:
+        from tools.document_intelligence import (
+            preprocess_pdf_pages,
+            extract_with_ocr,
+            classify_document,
+            extract_tables_advanced,
+            extract_financial_entities,
+            normalize_financial_values,
+            validate_financial_data,
+            calculate_confidence_scores,
+        )
+        from tools.document_intelligence.unit_normalizer import detect_and_normalize
+        
+        logger.info(f"Starting advanced document intelligence pipeline for {file_path}")
+        
+        # Stage 1: Image Preprocessing
+        logger.info("Stage 1: Preprocessing PDF pages...")
+        preprocessed_images = preprocess_pdf_pages(file_path, dpi=300)
+        
+        if not preprocessed_images:
+            logger.warning("Preprocessing failed, falling back to basic extraction")
+            return parse_financial_document(file_path, doc_type)
+        
+        # Stage 2: OCR with Layout Detection
+        logger.info("Stage 2: Running OCR with layout detection...")
+        ocr_result = extract_with_ocr(preprocessed_images, file_path)
+        
+        full_text = ocr_result.get("full_text", "")
+        text_blocks = ocr_result.get("text_blocks", [])
+        ocr_tables = ocr_result.get("tables", [])
+        ocr_confidence = ocr_result.get("confidence", 0.0)
+        
+        # Stage 3: Document Classification
+        logger.info("Stage 3: Classifying document type...")
+        doc_classification = classify_document(full_text, Path(file_path).name)
+        detected_doc_type = doc_classification.get("document_type", doc_type)
+        
+        logger.info(f"Detected document type: {detected_doc_type}")
+        
+        # Stage 4: Advanced Table Extraction
+        logger.info("Stage 4: Extracting tables...")
+        tables = extract_tables_advanced(file_path, ocr_tables, use_camelot=True)
+        
+        # Stage 5: Financial Entity Extraction
+        logger.info("Stage 5: Extracting financial entities...")
+        entities = extract_financial_entities(full_text, tables, detected_doc_type)
+        
+        # Stage 6: Unit Normalization
+        logger.info("Stage 6: Normalizing units...")
+        normalized_entities = detect_and_normalize(entities, full_text)
+        
+        # Stage 7: Validation
+        logger.info("Stage 7: Validating extracted data...")
+        validation_report = validate_financial_data(normalized_entities, detected_doc_type)
+        
+        # Stage 8: Confidence Scoring
+        logger.info("Stage 8: Calculating confidence scores...")
+        confidence_result = calculate_confidence_scores(
+            normalized_entities,
+            ocr_confidence,
+            validation_report,
+            doc_classification
+        )
+        
+        # Compile comprehensive result
+        result = {
+            "file_path": file_path,
+            "file_name": Path(file_path).name,
+            "doc_type": detected_doc_type,
+            "doc_classification": doc_classification,
+            
+            # Raw extracted content
+            "text": full_text[:40_000],
+            "text_blocks_count": len(text_blocks),
+            "page_count": len(preprocessed_images),
+            
+            # Structured financial data
+            "financial_entities": confidence_result["entities"],
+            "tables": tables,
+            "tables_count": len(tables),
+            
+            # Quality metrics
+            "ocr_confidence": ocr_confidence,
+            "overall_confidence": confidence_result["overall_confidence"],
+            "confidence_breakdown": confidence_result["confidence_breakdown"],
+            "reliability_score": confidence_result["reliability_score"],
+            
+            # Validation
+            "validation": validation_report,
+            "is_valid": validation_report.get("valid", True),
+            
+            # Metadata
+            "extraction_method": "advanced_intelligence_pipeline",
+            "pipeline_version": "2.0",
+            "error": None,
+        }
+        
+        logger.info(f"Pipeline complete. Confidence: {result['overall_confidence']:.1%}, Reliability: {result['reliability_score']}")
+        
+        return result
+        
+    except ImportError as e:
+        logger.warning(f"Document intelligence modules not available: {e}. Falling back to basic extraction.")
+        return parse_financial_document(file_path, doc_type)
+    except Exception as e:
+        logger.error(f"Error in advanced pipeline: {e}. Falling back to basic extraction.")
+        return parse_financial_document(file_path, doc_type)
 
 
 # ─── Core Extraction ──────────────────────────────────────────────────────────

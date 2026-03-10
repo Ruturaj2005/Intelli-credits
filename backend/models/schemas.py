@@ -39,6 +39,23 @@ class JobStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class ExposureStatus(str, Enum):
+    """Status of exposure limit checks."""
+    GREEN = "GREEN"
+    AMBER = "AMBER"
+    HARD_BLOCK = "HARD_BLOCK"
+
+
+class PSLCategory(str, Enum):
+    """Priority Sector Lending categories."""
+    AGRICULTURE = "AGRICULTURE"
+    MSME = "MSME"
+    EXPORT_CREDIT = "EXPORT_CREDIT"
+    HOUSING = "HOUSING"
+    EDUCATION = "EDUCATION"
+    RENEWABLE_ENERGY = "RENEWABLE_ENERGY"
+
+
 # ─── Financial Sub-models ─────────────────────────────────────────────────────
 
 class GSTDiscrepancy(BaseModel):

@@ -5,7 +5,7 @@ langchain-google-genai>=1.0.0
 langchain-community>=0.2.5
 langgraph>=0.1.5
 google-generativeai>=0.3.0
-surfapi>=1.0.0
+# surfapi>=1.0.0  # Optional - Web search API (configure SURFAPI_KEY if needed)
 motor>=3.3.0
 pymongo>=4.6.0
 PyMuPDF>=1.23.26
@@ -21,3 +21,24 @@ pydantic>=2.6.0
 httpx>=0.27.0
 openpyxl>=3.1.2
 scikit-learn>=1.4.0
+
+# ─── Document Intelligence Pipeline Dependencies ──────────────────────────────
+# Image preprocessing and OCR
+opencv-python>=4.8.0
+pdf2image>=1.16.3
+Pillow>=10.0.0
+
+# OCR engines
+paddleocr>=2.7.0
+paddlepaddle>=2.5.0  # PaddleOCR backend (CPU version)
+# For GPU: paddlepaddle-gpu>=2.5.0  # Uncomment if GPU available
+
+# Table extraction
+camelot-py[cv]>=0.11.0  # Includes cv2 support
+# ghostscript>=0.7  # Required by Camelot on some systems
+
+# Fallback OCR (optional but recommended)
+pytesseract>=0.3.10  # Requires Tesseract binary installation
+
+# Image format support
+opencv-contrib-python>=4.8.0  # Additional OpenCV modules (optional)
