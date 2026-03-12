@@ -973,3 +973,88 @@ class EnhancedMasterCreditOutput(BaseModel):
 class WSMessage(BaseModel):
     type: str  # "log" | "status" | "complete" | "error"
     payload: Dict[str, Any]
+
+
+# ─── Document Classification Review Models ───────────────────────────────────
+
+class ConfidenceLevel(str, Enum):
+    """Document classification confidence level"""
+    HIGH = "HIGH"      # >= 0.70
+    MEDIUM = "MEDIUM"  # 0.50 - 0.70
+    LOW = "LOW"        # < 0.50
+
+
+class AlternativeClassification(BaseModel):
+    """Alternative document type with confidence"""
+    type: str
+    confidence: float
+
+
+class DetectedDocument(BaseModel):
+    """Detected document with classification metadata"""
+    file_id: str
+    file_name: str
+    file_size: int
+    auto_classification: str
+    confidence: float
+    confidence_label: ConfidenceLevel
+    user_override_allowed: bool = True
+    classification_reasoning: str
+    alternative_classifications: List[AlternativeClassification] = Field(default_factory=list)
+    requires_review: bool
+
+
+class UploadAndClassifyResponse(BaseModel):
+    """Response from document upload and classification"""
+    application_id: str
+    detected_documents: List[DetectedDocument]
+    requires_user_review: bool
+    auto_accept_count: int
+    review_required_count: int
+
+
+class ConfirmedClassification(BaseModel):
+    """User-confirmed document classification"""
+    file_id: str
+    confirmed_type: str
+    user_modified: bool = False
+    user_comment: Optional[str] = None
+
+
+class ConfirmClassificationRequest(BaseModel):
+    """Request to confirm document classifications"""
+    application_id: str
+    classifications: List[ConfirmedClassification]
+    qualitative_inputs: Optional[dict] = None
+
+
+class ConfirmClassificationResponse(BaseModel):
+    """Response from classification confirmation"""
+    status: str = "pipeline_started"
+    job_id: str
+    websocket_url: str
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCHEMA SELECTION MODELS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class DocumentSchemaMapping(BaseModel):
+    """Mapping of document to selected schema"""
+    file_id: str
+    selected_schema_id: str
+    custom_hints: Optional[Dict[str, List[str]]] = None  # Custom extraction hints per field
+
+
+class SchemaSelectionRequest(BaseModel):
+    """Request to save schema selections for documents"""
+    application_id: str
+    document_schema_mapping: List[DocumentSchemaMapping]
+
+
+class SchemaSelectionResponse(BaseModel):
+    """Response from schema selection"""
+    status: str = "schemas_configured"
+    application_id: str
+    schemas_count: int
+

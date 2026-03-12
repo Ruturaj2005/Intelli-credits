@@ -13,6 +13,8 @@ from typing import Any, Dict, List
 
 import google.generativeai as genai
 
+from tools.schema_mapper import SchemaMapper, SCHEMA_REGISTRY
+
 from tools.gst_analyser import analyse_gst_documents
 from tools.pdf_parser import format_documents_for_llm
 from utils.prompts import INGESTOR_PROMPT
@@ -454,6 +456,192 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             fraud_flags.extend(mda_analysis.get("red_flags", []))
             extracted.setdefault("red_flags", []).extend(mda_analysis.get("red_flags", []))
 
+    # ── Step 6: Schema-Guided Extraction ──────────────────────────────────────
+    schema_extraction_results = {}
+    selected_schemas = state.get("selected_schemas", {})
+    document_classifications = state.get("document_classifications", {})
+    
+    if selected_schemas:
+        logs.append(_log(agent, f"Running schema-guided extraction on {len(selected_schemas)} documents..."))
+        
+        # Configure Gemini model for schema extraction
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+        
+        for file_id, schema_config in selected_schemas.items():
+            schema_id = schema_config.get("schema_id")
+            custom_hints = schema_config.get("custom_hints", {})
+            
+            # Find the document in the documents list
+            document = None
+            for doc in documents:
+                if doc.get("file_id") == file_id or doc.get("filename") == file_id:
+                    document = doc
+                    break
+            
+            if not document:
+                logs.append(_log(agent, f"Document {file_id} not found for schema extraction", level="WARN"))
+                continue
+            
+            # Get schema template
+            if schema_id not in SCHEMA_REGISTRY:
+                logs.append(_log(agent, f"Invalid schema ID: {schema_id}", level="WARN"))
+                continue
+            
+            schema = SCHEMA_REGISTRY[schema_id]
+            doc_type = document_classifications.get(file_id, {}).get("confirmed_type", "UNKNOWN")
+            
+            logs.append(_log(agent, f"Extracting {schema.template_name} from {doc_type} ({file_id[:8]}...)"))
+            
+            try:
+                # Prepare document for extraction (text + tables)
+                extraction_doc = {
+                    "text": document.get("text", ""),
+                    "tables": document.get("tables", []),
+                    "metadata": document.get("metadata", {})
+                }
+                
+                # Run schema extraction
+                result = SchemaMapper.extract_with_schema(
+                    document=extraction_doc,
+                    schema=schema,
+                    gemini_model=gemini_model,
+                    custom_hints=custom_hints if custom_hints else None
+                )
+                
+                schema_extraction_results[file_id] = result
+                
+                # Log completion
+                completion_pct = result["completion_percentage"]
+                missing_count = len(result["missing_required_fields"])
+                
+                log_level = "SUCCESS" if completion_pct >= 70 else "WARN" if completion_pct >= 50 else "ERROR"
+                log_msg = f"Schema extraction: {file_id[:8]} ({doc_type}) → {completion_pct:.1f}% complete"
+                
+                if missing_count > 0:
+                    log_msg += f", {missing_count} required field(s) missing"
+                
+                logs.append(_log(agent, log_msg, level=log_level))
+                
+            except Exception as exc:
+                logs.append(_log(agent, f"Schema extraction failed for {file_id}: {exc}", level="ERROR"))
+                schema_extraction_results[file_id] = {
+                    "schema_id": schema_id,
+                    "schema_name": schema.template_name,
+                    "error": str(exc),
+                    "completion_percentage": 0.0,
+                    "fields": {},
+                    "missing_required_fields": [f.field_label for f in schema.fields if f.required]
+                }
+        
+        # ── Step 6.1: Merge FINANCIAL_ANALYSIS_SCHEMA results into extracted_financials ───
+        for file_id, result in schema_extraction_results.items():
+            if result.get("schema_id") == "SCH_FINANCIAL_001":  # FINANCIAL_ANALYSIS_SCHEMA
+                logs.append(_log(agent, "Merging schema-extracted financials into extracted_financials..."))
+                
+                schema_fields = result.get("fields", {})
+                financials = extracted.setdefault("financials", {})
+                
+                # Field mapping: schema_field_name → extracted_financials key
+                field_mapping = {
+                    "revenue": "revenue",
+                    "ebitda": "ebitda",
+                    "pat": "net_profit",
+                    "total_debt": "total_debt",
+                    "net_worth": "net_worth",
+                    "current_assets": "current_assets",
+                    "current_liabilities": "current_liabilities",
+                    "interest_expense": "interest_expense",
+                    "depreciation": "depreciation",
+                    "cash_from_operations": "operating_cash_flow",
+                }
+                
+                for schema_field, extracted_key in field_mapping.items():
+                    field_data = schema_fields.get(schema_field, {})
+                    
+                    if field_data.get("status") == "EXTRACTED" and field_data.get("confidence", 0) >= 0.6:
+                        schema_value = field_data["value"]
+                        existing_value = financials.get(extracted_key)
+                        
+                        # Convert to float for comparison
+                        try:
+                            schema_val_float = float(str(schema_value).replace(',', ''))
+                            existing_val_float = float(existing_value) if existing_value else 0.0
+                            
+                            # Check for >10% difference
+                            if existing_val_float > 0 and schema_val_float > 0:
+                                diff_pct = abs(schema_val_float - existing_val_float) / existing_val_float * 100
+                                
+                                if diff_pct > 10:
+                                    logs.append(
+                                        _log(
+                                            agent,
+                                            f"⚠ Schema vs LLM mismatch for {extracted_key}: "
+                                            f"Schema={schema_val_float:.2f}, LLM={existing_val_float:.2f} ({diff_pct:.1f}% diff)",
+                                            level="WARN"
+                                        )
+                                    )
+                                    # Keep both values
+                                    financials[f"{extracted_key}_schema"] = schema_val_float
+                                    financials[f"{extracted_key}_parsed"] = existing_val_float
+                                else:
+                                    # Use schema value (higher confidence method)
+                                    financials[extracted_key] = schema_val_float
+                            else:
+                                # Use schema value if existing is missing
+                                financials[extracted_key] = schema_val_float
+                                
+                        except (ValueError, TypeError) as e:
+                            logs.append(_log(agent, f"Failed to parse {schema_field}: {e}", level="WARN"))
+        
+        # ── Step 6.2: Compile Ingestion Summary ───────────────────────────────────
+        total_docs = len(documents)
+        schema_guided_count = len(schema_extraction_results)
+        
+        completion_pcts = [
+            result["completion_percentage"]
+            for result in schema_extraction_results.values()
+            if "completion_percentage" in result
+        ]
+        avg_completion = sum(completion_pcts) / len(completion_pcts) if completion_pcts else 0.0
+        
+        docs_needing_review = [
+            file_id
+            for file_id, result in schema_extraction_results.items()
+            if result.get("completion_percentage", 0) < 70
+        ]
+        
+        ingestion_summary = {
+            "total_documents": total_docs,
+            "schema_guided_count": schema_guided_count,
+            "avg_completion_pct": round(avg_completion, 2),
+            "documents_needing_review": docs_needing_review,
+            "high_confidence_count": sum(1 for pct in completion_pcts if pct >= 80),
+            "medium_confidence_count": sum(1 for pct in completion_pcts if 50 <= pct < 80),
+            "low_confidence_count": sum(1 for pct in completion_pcts if pct < 50),
+        }
+        
+        logs.append(
+            _log(
+                agent,
+                f"Schema extraction summary: {schema_guided_count} docs processed, "
+                f"{avg_completion:.1f}% avg completion, "
+                f"{len(docs_needing_review)} need review",
+                level="SUCCESS"
+            )
+        )
+    else:
+        # No schemas selected, use default summary
+        ingestion_summary = {
+            "total_documents": len(documents),
+            "schema_guided_count": 0,
+            "avg_completion_pct": 0.0,
+            "documents_needing_review": [],
+            "high_confidence_count": 0,
+            "medium_confidence_count": 0,
+            "low_confidence_count": 0,
+        }
+
     # Propagate extracted fields to state for downstream agents
     out_state = {
         "extracted_financials": extracted,
@@ -463,6 +651,8 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         "forgery_warning": state.get("forgery_warning"),
         "requires_manual_document_review": state.get("requires_manual_document_review"),
         "mda_sentiment": mda_analysis,
+        "schema_extraction_results": schema_extraction_results,
+        "ingestion_summary": ingestion_summary,
         # Additional fields for new tools
         "cin": extracted.get("cin", ""),
         "incorporation_date": extracted.get("incorporation_date", ""),

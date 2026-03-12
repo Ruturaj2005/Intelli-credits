@@ -2,6 +2,8 @@ import { BrowserRouter, Routes, Route, NavLink, useNavigate } from 'react-router
 import { useState, useEffect } from 'react'
 import Dashboard from './pages/Dashboard.jsx'
 import NewAppraisal from './pages/NewAppraisal.jsx'
+import ClassificationReview from './pages/ClassificationReview.jsx'
+import SchemaSelection from './pages/SchemaSelection.jsx'
 import Pipeline from './pages/Pipeline.jsx'
 import Results from './pages/Results.jsx'
 import Landing from './pages/Landing.jsx'
@@ -126,6 +128,8 @@ export default function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/appraisal/new" element={<NewAppraisal />} />
+            <Route path="/appraisal/:applicationId/classify-review" element={<ClassificationReview />} />
+            <Route path="/appraisal/:applicationId/schema-config" element={<SchemaSelection />} />
             <Route path="/appraisal/:jobId/pipeline" element={<Pipeline />} />
             <Route path="/appraisal/:jobId/results" element={<Results />} />
           </Routes>

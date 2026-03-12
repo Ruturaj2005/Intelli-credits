@@ -1,11 +1,11 @@
 /**
- * NewAppraisal — multi-section form to upload documents and start the appraisal.
+ * NewAppraisal — multi-step wizard with entity onboarding, loan application, and appraisal.
  */
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDropzone } from 'react-dropzone'
 import axios from 'axios'
-import { Upload, FileText, CheckCircle2, Building2, IndianRupee, Layers, Eye, Users, AlertCircle, Info } from 'lucide-react'
+import { Upload, FileText, CheckCircle2, Building2, IndianRupee, Layers, Eye, Users, AlertCircle, Info, ArrowLeft, ArrowRight, Check } from 'lucide-react'
 
 const API = '/api'
 
@@ -20,6 +20,25 @@ const SECTORS = [
   'Hospitality',
   'Agriculture',
   'Other',
+]
+
+const LOAN_TYPES = [
+  'Working Capital',
+  'Term Loan',
+  'Project Finance',
+  'Invoice Discounting',
+  'Trade Finance',
+  'Equipment Finance',
+  'Construction Finance',
+  'Bridge Loan',
+]
+
+const BUSINESS_MODELS = [
+  'B2B',
+  'B2C',
+  'B2B2C',
+  'Marketplace',
+  'Hybrid',
 ]
 
 const DOC_ZONES = [
@@ -119,17 +138,49 @@ function DropZone({ meta, onFile, file }) {
 
 export default function NewAppraisal() {
   const navigate = useNavigate()
+  const [currentStep, setCurrentStep] = useState(1)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  
+  // Step 1: Entity Details
+  const [entityForm, setEntityForm] = useState({
+    company_name: '',
+    cin: '',
+    pan: '',
+    sector: '',
+    annual_turnover: '',
+    date_of_incorporation: '',
+    business_model: '',
+    employee_count: '',
+  })
+  const [entityId, setEntityId] = useState(null)
+  
+  // Step 2: Loan Application
+  const [loanForm, setLoanForm] = useState({
+    loan_type: '',
+    loan_amount: '',
+    loan_tenure_months: '',
+    expected_interest_rate: '',
+    purpose: '',
+    collateral_offered: '',
+    existing_banking_relationship: false,
+  })
+  const [applicationId, setApplicationId] = useState(null)
+  const [requiredDocs, setRequiredDocs] = useState([])
+  
+  // Step 3: Company Details (kept for backward compatibility)
   const [form, setForm] = useState({
     company_name: '',
     sector: '',
     loan_amount: '',
     qualitative_notes: '',
   })
-  const [files, setFiles] = useState({})
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState('factory')
   
+  // Step 4: Documents
+  const [files, setFiles] = useState({})
+  
+  // Step 5: Qualitative Assessment
+  const [activeTab, setActiveTab] = useState('factory')
   const [qualitative, setQualitative] = useState({
     factory_visit: {
       visit_conducted: 'yes',
@@ -160,6 +211,108 @@ export default function NewAppraisal() {
       key_concerns: ''
     }
   })
+
+  // CIN Validation
+  const validateCIN = (cin) => {
+    const regex = /^[A-Z]{1}[0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/
+    return regex.test(cin)
+  }
+
+  // PAN Validation
+  const validatePAN = (pan) => {
+    const regex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/
+    return regex.test(pan)
+  }
+
+  // Step 1: Submit Entity Profile
+  const handleEntitySubmit = async () => {
+    setError('')
+    
+    if (!entityForm.company_name.trim()) {
+      setError('Company name is required')
+      return
+    }
+    if (entityForm.cin && !validateCIN(entityForm.cin)) {
+      setError('Invalid CIN format (21 characters: e.g., U12345AB2020PTC123456)')
+      return
+    }
+    if (entityForm.pan && !validatePAN(entityForm.pan)) {
+      setError('Invalid PAN format (10 characters: e.g., ABCDE1234F)')
+      return
+    }
+    if (!entityForm.sector) {
+      setError('Please select a sector')
+      return
+    }
+    
+    setLoading(true)
+    try {
+      const { data } = await axios.post(`${API}/onboarding/entity`, {
+        company_name: entityForm.company_name.trim(),
+        cin: entityForm.cin || null,
+        pan: entityForm.pan || null,
+        sector: entityForm.sector,
+        annual_turnover: parseFloat(entityForm.annual_turnover) || null,
+        date_of_incorporation: entityForm.date_of_incorporation || null,
+        business_model: entityForm.business_model || null,
+        employee_count: parseInt(entityForm.employee_count) || null,
+      })
+      
+      setEntityId(data.entity_id)
+      setCurrentStep(2)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save entity profile')
+    } finally {
+      setLoading(false)
+    }
+  }
+  
+  // Step 2: Submit Loan Application
+  const handleLoanSubmit = async () => {
+    setError('')
+    
+    if (!loanForm.loan_type) {
+      setError('Please select loan type')
+      return
+    }
+    if (!loanForm.loan_amount || parseFloat(loanForm.loan_amount) <= 0) {
+      setError('Please enter valid loan amount')
+      return
+    }
+    
+    setLoading(true)
+    try {
+      const { data } = await axios.post(`${API}/onboarding/loan-application`, {
+        entity_id: entityId,
+        loan_application: {
+          loan_type: loanForm.loan_type,
+          loan_amount: parseFloat(loanForm.loan_amount),
+          loan_tenure_months: parseInt(loanForm.loan_tenure_months) || null,
+          expected_interest_rate: parseFloat(loanForm.expected_interest_rate) || null,
+          purpose: loanForm.purpose || null,
+          collateral_offered: loanForm.collateral_offered || null,
+          existing_banking_relationship: loanForm.existing_banking_relationship,
+        },
+      })
+      
+      setApplicationId(data.application_id)
+      setRequiredDocs(data.required_documents || [])
+      
+      // Pre-fill form for backward compatibility
+      setForm({
+        company_name: entityForm.company_name,
+        sector: entityForm.sector,
+        loan_amount: loanForm.loan_amount,
+        qualitative_notes: '',
+      })
+      
+      setCurrentStep(3)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save loan application')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value })
 
@@ -194,37 +347,60 @@ export default function NewAppraisal() {
     return true
   }
 
-  const handleSubmit = async (e) => {
+  const handleFinalSubmit = async (e) => {
     e.preventDefault()
     setError('')
 
-    if (!form.company_name.trim()) {
-      setError('Company name is required.')
+    // Validation
+    if (!applicationId) {
+      setError('Application ID missing. Please complete entity and loan details first.')
       return
     }
-    if (!form.sector) {
-      setError('Please select a sector.')
+
+    const uploadedFiles = Object.values(files).filter(Boolean)
+    if (uploadedFiles.length === 0) {
+      setError('Please upload at least one document before proceeding.')
       return
     }
 
     setLoading(true)
-    const fd = new FormData()
-    fd.append('company_name', form.company_name.trim())
-    fd.append('sector', form.sector)
-    fd.append('loan_amount', form.loan_amount || '0')
-    fd.append('qualitative_notes', form.qualitative_notes)
-    fd.append('qualitative_inputs', JSON.stringify(qualitative))
-
-    DOC_ZONES.forEach(({ field }) => {
-      if (files[field]) fd.append(field, files[field])
-    })
 
     try {
-      const { data } = await axios.post(`${API}/appraisal/start`, fd)
-      navigate(`/appraisal/${data.job_id}/pipeline`)
+      // Step 1: Upload and classify documents
+      const fd = new FormData()
+      fd.append('application_id', applicationId)
+      
+      DOC_ZONES.forEach(({ field }) => {
+        if (files[field]) {
+          fd.append('files', files[field])
+        }
+      })
+
+      // Also store qualitative inputs for later use
+      fd.append('qualitative_inputs', JSON.stringify(qualitative))
+
+      const { data } = await axios.post(`${API}/documents/upload-and-classify`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+
+      // Step 2: Navigate to classification review page with results
+      navigate(`/appraisal/${applicationId}/classify-review`, {
+        state: {
+          classificationData: data,
+          qualitativeInputs: qualitative,
+        }
+      })
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to start appraisal. Check backend connection.')
+      setError(err.response?.data?.detail || 'Failed to upload and classify documents. Check backend connection.')
       setLoading(false)
+    }
+  }
+
+  // Step Navigation
+  const goToStep = (step) => {
+    if (step <= currentStep || (step === 2 && entityId) || (step === 3 && applicationId)) {
+      setCurrentStep(step)
+      setError('')
     }
   }
 
@@ -246,625 +422,979 @@ export default function NewAppraisal() {
             </p>
           </div>
         </div>
+        
+        {/* Step Progress */}
+        <div className="mt-6 flex items-center gap-2">
+          {[
+            { num: 1, label: 'Entity Details' },
+            { num: 2, label: 'Loan Application' },
+            { num: 3, label: 'Documents' },
+            { num: 4, label: 'Due Diligence' }
+          ].map((step, idx) => (
+            <div key={step.num} className="flex items-center flex-1">
+              <button
+                type="button"
+                onClick={() => goToStep(step.num)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all ${ 
+                  currentStep === step.num ? 'scale-105' : ''
+                } ${
+                  currentStep > step.num ? 'cursor-pointer hover:scale-105' : ''
+                }`}
+                style={{
+                  background: currentStep >= step.num ? 'var(--accent)20' : 'var(--surface-elevated)',
+                  borderLeft: currentStep === step.num ? '3px solid var(--accent)' : '3px solid transparent',
+                }}
+                disabled={step.num > currentStep && !(step.num === 2 && entityId) && !(step.num === 3 && applicationId)}
+              >
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${
+                  currentStep > step.num ? 'animate-scale-in' : ''
+                }`}
+                     style={{ 
+                       background: currentStep >= step.num ? 'var(--accent)' : 'var(--border)',
+                       color: currentStep >= step.num ? 'white' : 'var(--muted)',
+                     }}>
+                  {currentStep > step.num ? <Check size={14} /> : step.num}
+                </div>
+                <span className="text-xs font-semibold" style={{ 
+                  color: currentStep >= step.num ? 'var(--accent)' : 'var(--muted)' 
+                }}>
+                  {step.label}
+                </span>
+              </button>
+              {idx < 3 && (
+                <div className="flex-1 h-0.5 mx-1" style={{ 
+                  background: currentStep > step.num ? 'var(--accent)' : 'var(--border)' 
+                }} />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Section 1: Company Details */}
-        <div className="card p-8 animate-scale-in" style={{ animationDelay: '100ms' }}>
-          <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
-                 style={{ background: 'var(--accent)20', color: 'var(--accent)' }}>
-              1
+      <form onSubmit={handleFinalSubmit} className="space-y-6">
+        {/* STEP 1: Entity Details */}
+        {currentStep === 1 && (
+          <div className="card p-8 animate-scale-in">
+            <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                   style={{ background: 'var(--accent)20', color: 'var(--accent)' }}>
+                1
+              </div>
+              <div>
+                <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                  Entity Details
+                </h2>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                  Company profile with CIN/PAN validation
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
-                Company Information
-              </h2>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                Basic details about the applicant entity
-              </p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-5">
-            <div className="col-span-2 input-group">
-              <label className="input-label flex items-center gap-2">
-                <Building2 size={14} style={{ color: 'var(--accent)' }} />
-                Company Name *
-              </label>
-              <input
-                className="input-field"
-                name="company_name"
-                value={form.company_name}
-                onChange={handleChange}
-                placeholder="e.g. XYZ Manufacturing Pvt. Ltd."
-                required
-              />
-            </div>
-            <div className="input-group">
-              <label className="input-label flex items-center gap-2">
-                <Layers size={14} style={{ color: 'var(--accent)' }} />
-                Sector *
-              </label>
-              <select
-                className="input-field"
-                name="sector"
-                value={form.sector}
-                onChange={handleChange}
-                required
-              >
-                <option value="">Select sector...</option>
-                {SECTORS.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div className="input-group">
-              <label className="input-label flex items-center gap-2">
-                <IndianRupee size={14} style={{ color: 'var(--accent)' }} />
-                Loan Amount Requested (₹ Crore)
-              </label>
-              <input
-                className="input-field font-mono"
-                name="loan_amount"
-                type="number"
-                min="0"
-                step="0.01"
-                value={form.loan_amount}
-                onChange={handleChange}
-                placeholder="e.g. 15.00"
-              />
-            </div>          <div className="col-span-2 input-group">
-              <label className="input-label">Qualitative Notes (Optional)</label>
-              <textarea
-                className="input-field"
-                name="qualitative_notes"
-                value={form.qualitative_notes}
-                onChange={handleChange}
-                placeholder="Add any special instructions, context, or observations..."
-                rows="3"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Section 2: Document Upload */}
-        <div className="card p-8 animate-scale-in" style={{ animationDelay: '200ms' }}>
-          <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
-                 style={{ background: 'var(--accent2)20', color: 'var(--accent2)' }}>
-              2
-            </div>
-            <div>
-              <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
-                Financial Documents
-              </h2>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                Upload financial statements • Max {50}MB per file • PDF preferred
-              </p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            {DOC_ZONES.map((meta, idx) => (
-              <div key={meta.field} className="animate-slide-up" style={{ animationDelay: `${300 + idx * 50}ms` }}>
-                <DropZone
-                  meta={meta}
-                  onFile={handleFile}
-                  file={files[meta.field]}
+            
+            <div className="space-y-5">
+              <div className="input-group">
+                <label className="input-label flex items-center gap-2">
+                  <Building2 size={14} style={{ color: 'var(--accent)' }} />
+                  Company Name *
+                </label>
+                <input
+                  className="input-field"
+                  value={entityForm.company_name}
+                  onChange={(e) => setEntityForm({ ...entityForm, company_name: e.target.value })}
+                  placeholder="e.g. XYZ Manufacturing Pvt. Ltd."
+                  required
                 />
               </div>
-            ))}
+
+              <div className="grid grid-cols-2 gap-5">
+                <div className="input-group">
+                  <label className="input-label">
+                    Corporate Identification Number (CIN)
+                    <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>21 characters</span>
+                  </label>
+                  <input
+                    className="input-field font-mono"
+                    value={entityForm.cin}
+                    onChange={(e) => setEntityForm({ ...entityForm, cin: e.target.value.toUpperCase() })}
+                    placeholder="U12345AB2020PTC123456"
+                    maxLength={21}
+                  />
+                  {entityForm.cin && !validateCIN(entityForm.cin) && (
+                    <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>
+                      Invalid CIN format
+                    </p>
+                  )}
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">
+                    PAN
+                    <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>10 characters</span>
+                  </label>
+                  <input
+                    className="input-field font-mono"
+                    value={entityForm.pan}
+                    onChange={(e) => setEntityForm({ ...entityForm, pan: e.target.value.toUpperCase() })}
+                    placeholder="ABCDE1234F"
+                    maxLength={10}
+                  />
+                  {entityForm.pan && !validatePAN(entityForm.pan) && (
+                    <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>
+                      Invalid PAN format
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-5">
+                <div className="input-group">
+                  <label className="input-label flex items-center gap-2">
+                    <Layers size={14} style={{ color: 'var(--accent)' }} />
+                    Sector *
+                  </label>
+                  <select
+                    className="input-field"
+                    value={entityForm.sector}
+                    onChange={(e) => setEntityForm({ ...entityForm, sector: e.target.value })}
+                    required
+                  >
+                    <option value="">Select sector...</option>
+                    {SECTORS.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label flex items-center gap-2">
+                    <IndianRupee size={14} style={{ color: 'var(--accent)' }} />
+                    Annual Turnover (₹ Crore)
+                  </label>
+                  <input
+                    className="input-field font-mono"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={entityForm.annual_turnover}
+                    onChange={(e) => setEntityForm({ ...entityForm, annual_turnover: e.target.value })}
+                    placeholder="e.g. 25.00"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-5">
+                <div className="input-group">
+                  <label className="input-label">Date of Incorporation</label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={entityForm.date_of_incorporation}
+                    onChange={(e) => setEntityForm({ ...entityForm, date_of_incorporation: e.target.value })}
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Business Model</label>
+                  <select
+                    className="input-field"
+                    value={entityForm.business_model}
+                    onChange={(e) => setEntityForm({ ...entityForm, business_model: e.target.value })}
+                  >
+                    <option value="">Select...</option>
+                    {BUSINESS_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Employee Count</label>
+                <input
+                  type="number"
+                  className="input-field"
+                  min="0"
+                  value={entityForm.employee_count}
+                  onChange={(e) => setEntityForm({ ...entityForm, employee_count: e.target.value })}
+                  placeholder="e.g. 150"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-8">
+              <button
+                type="button"
+                onClick={handleEntitySubmit}
+                disabled={loading}
+                className="btn-primary flex items-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <div className="spinner"></div>
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Next: Loan Application</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-          <div className="mt-5 p-4 rounded-lg flex items-center justify-between" 
-               style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-3">
-              <Upload size={18} style={{ color: 'var(--accent)' }} />
+        )}
+
+        {/* STEP 2: Loan Application */}
+        {currentStep === 2 && (
+          <div className="card p-8 animate-scale-in">
+            <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                   style={{ background: 'var(--accent2)20', color: 'var(--accent2)' }}>
+                2
+              </div>
               <div>
-                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                  {Object.values(files).filter(Boolean).length} / {DOC_ZONES.length} files uploaded
-                </p>
+                <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                  Loan Application
+                </h2>
                 <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                  {Object.values(files).filter(Boolean).length === 0 
-                    ? 'Upload documents for better analysis accuracy'
-                    : 'Engine will process all uploaded documents'
-                  }
+                  Loan requirements and terms
                 </p>
               </div>
             </div>
-            {Object.values(files).filter(Boolean).length > 0 && (
-              <div className="px-3 py-1.5 rounded-full font-mono text-xs font-semibold"
-                   style={{ background: 'var(--accent)15', color: 'var(--accent)' }}>
-                Ready
+            
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-5">
+                <div className="input-group">
+                  <label className="input-label">Loan Type *</label>
+                  <select
+                    className="input-field"
+                    value={loanForm.loan_type}
+                    onChange={(e) => setLoanForm({ ...loanForm, loan_type: e.target.value })}
+                    required
+                  >
+                    <option value="">Select loan type...</option>
+                    {LOAN_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label flex items-center gap-2">
+                    <IndianRupee size={14} style={{ color: 'var(--accent)' }} />
+                    Loan Amount (₹ Crore) *
+                  </label>
+                  <input
+                    className="input-field font-mono"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={loanForm.loan_amount}
+                    onChange={(e) => setLoanForm({ ...loanForm, loan_amount: e.target.value })}
+                    placeholder="e.g. 10.00"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-5">
+                <div className="input-group">
+                  <label className="input-label">Loan Tenure (Months)</label>
+                  <input
+                    type="number"
+                    className="input-field"
+                    min="1"
+                    value={loanForm.loan_tenure_months}
+                    onChange={(e) => setLoanForm({ ...loanForm, loan_tenure_months: e.target.value })}
+                    placeholder="e.g. 60"
+                  />
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">Expected Interest Rate (%)</label>
+                  <input
+                    type="number"
+                    className="input-field font-mono"
+                    min="0"
+                    step="0.01"
+                    value={loanForm.expected_interest_rate}
+                    onChange={(e) => setLoanForm({ ...loanForm, expected_interest_rate: e.target.value })}
+                    placeholder="e.g. 9.5"
+                  />
+                </div>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Purpose of Loan</label>
+                <textarea
+                  className="input-field"
+                  rows="3"
+                  value={loanForm.purpose}
+                  onChange={(e) => setLoanForm({ ...loanForm, purpose: e.target.value })}
+                  placeholder="Describe the purpose and intended use of funds..."
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Collateral Offered</label>
+                <input
+                  className="input-field"
+                  value={loanForm.collateral_offered}
+                  onChange={(e) => setLoanForm({ ...loanForm, collateral_offered: e.target.value })}
+                  placeholder="e.g. Property, Equipment, Receivables"
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4"
+                    checked={loanForm.existing_banking_relationship}
+                    onChange={(e) => setLoanForm({ ...loanForm, existing_banking_relationship: e.target.checked })}
+                  />
+                  <span className="text-sm" style={{ color: 'var(--text)' }}>
+                    Existing banking relationship with your institution
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex justify-between mt-8">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(1)}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <ArrowLeft size={16} />
+                <span>Back</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleLoanSubmit}
+                disabled={loading}
+                className="btn-primary flex items-center gap-2"
+              >
+                {loading ? (
+                  <>
+                    <div className="spinner"></div>
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Next: Documents</span>
+                    <ArrowRight size={16} />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: Document Upload */}
+        {currentStep === 3 && (
+          <div className="card p-8 animate-scale-in">
+            <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                   style={{ background: 'var(--success)20', color: 'var(--success)' }}>
+                3
+              </div>
+              <div>
+                <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                  Financial Documents
+                </h2>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                  Upload required documents • Max 50MB per file • PDF preferred
+                </p>
+              </div>
+            </div>
+
+            {/* Required Documents Alert */}
+            {requiredDocs.length > 0 && (
+              <div className="mb-6 p-4 rounded-lg" 
+                   style={{ background: 'var(--accent)10', border: '1px solid var(--accent)30' }}>
+                <div className="flex items-start gap-3">
+                  <AlertCircle size={18} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <p className="text-sm font-semibold mb-2" style={{ color: 'var(--text)' }}>
+                      Required Documents for {loanForm.loan_type}
+                    </p>
+                    <ul className="text-xs space-y-1" style={{ color: 'var(--text)' }}>
+                      {requiredDocs.map((doc, idx) => (
+                        <li key={idx}>• {doc}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        </div>
 
-        {/* Section 3: Primary Due Diligence */}
-        <div className="card p-8 animate-scale-in" style={{ animationDelay: '300ms' }}>
-          <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
-                 style={{ background: 'var(--success)20', color: 'var(--success)' }}>
-              3
+            <div className="grid grid-cols-2 gap-4">
+              {DOC_ZONES.map((meta, idx) => (
+                <div key={meta.field} className="animate-slide-up" style={{ animationDelay: `${idx * 50}ms` }}>
+                  <DropZone
+                    meta={meta}
+                    onFile={handleFile}
+                    file={files[meta.field]}
+                  />
+                </div>
+              ))}
             </div>
-            <div className="flex-1">
-              <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
-                Primary Due Diligence
-              </h2>
-              <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                Site Visit and Management Interview — RBI Mandatory Assessment
+            <div className="mt-5 p-4 rounded-lg flex items-center justify-between" 
+                 style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+              <div className="flex items-center gap-3">
+                <Upload size={18} style={{ color: 'var(--accent)' }} />
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
+                    {Object.values(files).filter(Boolean).length} / {DOC_ZONES.length} files uploaded
+                  </p>
+                  <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                    {Object.values(files).filter(Boolean).length === 0 
+                      ? 'Upload documents for better analysis accuracy'
+                      : 'Engine will process all uploaded documents'
+                    }
+                  </p>
+                </div>
+              </div>
+              {Object.values(files).filter(Boolean).length > 0 && (
+                <div className="px-3 py-1.5 rounded-full font-mono text-xs font-semibold"
+                     style={{ background: 'var(--accent)15', color: 'var(--accent)' }}>
+                  Ready
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between mt-8">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(2)}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <ArrowLeft size={16} />
+                <span>Back</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentStep(4)}
+                className="btn-primary flex items-center gap-2"
+              >
+                <span>Next: Due Diligence</span>
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 4: Primary Due Diligence */}
+        {currentStep === 4 && (
+          <div className="card p-8 animate-scale-in">
+            <div className="flex items-center gap-3 mb-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm"
+                   style={{ background: 'var(--warning)20', color: 'var(--warning)' }}>
+                4
+              </div>
+              <div className="flex-1">
+                <h2 className="font-syne font-semibold text-lg" style={{ color: 'var(--text)' }}>
+                  Primary Due Diligence
+                </h2>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                  Site Visit and Management Interview — RBI Mandatory Assessment
+                </p>
+              </div>
+            </div>
+
+            {/* Banner */}
+            <div className="mb-6 p-4 rounded-lg flex items-start gap-3" 
+                 style={{ background: 'var(--accent)10', border: '1px solid var(--accent)30' }}>
+              <AlertCircle size={18} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
+              <p className="text-sm" style={{ color: 'var(--text)' }}>
+                <strong>These qualitative inputs contribute 30% to the final credit score.</strong> Inputs should be filled by the visiting credit officer after conducting site visit and management interview as per RBI guidelines on credit appraisal.
               </p>
             </div>
-          </div>
 
-          {/* Banner */}
-          <div className="mb-6 p-4 rounded-lg flex items-start gap-3" 
-               style={{ background: 'var(--accent)10', border: '1px solid var(--accent)30' }}>
-            <AlertCircle size={18} style={{ color: 'var(--accent)', flexShrink: 0, marginTop: '2px' }} />
-            <p className="text-sm" style={{ color: 'var(--text)' }}>
-              <strong>These qualitative inputs contribute 30% to the final credit score.</strong> Inputs should be filled by the visiting credit officer after conducting site visit and management interview as per RBI guidelines on credit appraisal.
-            </p>
-          </div>
-
-          {/* Tabs */}
-          <div className="flex gap-2 mb-6 border-b" style={{ borderColor: 'var(--border)' }}>
-            <button
-              type="button"
-              onClick={() => setActiveTab('factory')}
-              className={`flex items-center gap-2 px-4 py-3 font-semibold text-sm transition-all ${
-                activeTab === 'factory' ? 'border-b-2' : ''
-              }`}
-              style={{
-                color: activeTab === 'factory' ? 'var(--accent)' : 'var(--muted)',
-                borderColor: activeTab === 'factory' ? 'var(--accent)' : 'transparent'
-              }}
-            >
-              <Eye size={16} />
-              Factory / Site Visit
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('management')}
-              className={`flex items-center gap-2 px-4 py-3 font-semibold text-sm transition-all ${
-                activeTab === 'management' ? 'border-b-2' : ''
-              }`}
-              style={{
-                color: activeTab === 'management' ? 'var(--accent)' : 'var(--muted)',
-                borderColor: activeTab === 'management' ? 'var(--accent)' : 'transparent'
-              }}
-            >
-              <Users size={16} />
-              Management Interview
-            </button>
-          </div>
-
-          {/* Factory Visit Tab */}
-          {activeTab === 'factory' && (
-            <div className="space-y-5 animate-slide-up">
-              <div className="input-group">
-                <label className="input-label">Was a site visit conducted?</label>
-                <div className="flex gap-4">
-                  {['yes', 'no', 'not_applicable'].map(opt => (
-                    <label key={opt} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="visit_conducted"
-                        value={opt}
-                        checked={qualitative.factory_visit.visit_conducted === opt}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'visit_conducted', e.target.value)}
-                        className="w-4 h-4"
-                      />
-                      <span className="text-sm capitalize" style={{ color: 'var(--text)' }}>
-                        {opt.replace('_', ' ')}
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {qualitative.factory_visit.visit_conducted === 'yes' ? (
-                <>
-                  <div className="grid grid-cols-2 gap-5">
-                    <div className="input-group">
-                      <label className="input-label">Visit Date</label>
-                      <input
-                        type="date"
-                        className="input-field"
-                        value={qualitative.factory_visit.visit_date}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'visit_date', e.target.value)}
-                      />
-                    </div>
-                    <div className="input-group">
-                      <label className="input-label">Visited By (Name & Designation)</label>
-                      <input
-                        type="text"
-                        className="input-field"
-                        placeholder="e.g. John Doe - Senior Credit Officer"
-                        value={qualitative.factory_visit.visited_by}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'visited_by', e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Type of Premises Visited</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.factory_visit.premises_type}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'premises_type', e.target.value)}
-                    >
-                      <option value="">Select premises type...</option>
-                      {form.sector && PREMISES_OPTIONS[form.sector]?.map(opt => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {showField('capacity_utilization') && (
-                    <div className="input-group">
-                      <label className="input-label">Capacity Utilization</label>
-                      <select
-                        className="input-field"
-                        value={qualitative.factory_visit.capacity_utilization}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'capacity_utilization', e.target.value)}
-                      >
-                        <option value="">Select...</option>
-                        <option value="above_80">Above 80% - Excellent</option>
-                        <option value="60_to_80">60-80% - Good</option>
-                        <option value="40_to_60">40-60% - Moderate</option>
-                        <option value="below_40">Below 40% - Poor</option>
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="input-group">
-                    <label className="input-label">
-                      {form.sector === 'Manufacturing' ? 'Machinery & Asset Condition' 
-                       : form.sector === 'Healthcare' ? 'Equipment & Facility Condition'
-                       : form.sector === 'Technology' ? 'IT Infrastructure Condition'
-                       : 'Asset Condition'}
-                    </label>
-                    <select
-                      className="input-field"
-                      value={qualitative.factory_visit.asset_condition}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'asset_condition', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="modern_well_maintained">Modern & Well Maintained</option>
-                      <option value="adequate">Adequate - Regular Maintenance Visible</option>
-                      <option value="average">Average - Some Aging Visible</option>
-                      <option value="poor">Poor - Maintenance Concerns</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">
-                      {form.sector === 'Technology' ? 'Employee Strength & Attrition'
-                       : form.sector === 'Healthcare' ? 'Staff Strength & Quality'
-                       : 'Workforce Observations'}
-                    </label>
-                    <select
-                      className="input-field"
-                      value={qualitative.factory_visit.workforce_observations}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'workforce_observations', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="adequate_skilled">Adequate & Skilled</option>
-                      <option value="adequate_training_needed">Adequate but Training Needed</option>
-                      <option value="understaffed">Understaffed</option>
-                      <option value="high_attrition">High Attrition Concern</option>
-                    </select>
-                  </div>
-
-                  {showField('inventory_levels') && (
-                    <div className="input-group">
-                      <label className="input-label">Inventory Levels & Management</label>
-                      <select
-                        className="input-field"
-                        value={qualitative.factory_visit.inventory_levels}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'inventory_levels', e.target.value)}
-                      >
-                        <option value="">Select...</option>
-                        <option value="optimal">Optimal - Well Organized</option>
-                        <option value="adequate">Adequate</option>
-                        <option value="excess">Excess Inventory - Blockage Concern</option>
-                        <option value="depleted">Depleted - Supply Chain Issues</option>
-                      </select>
-                    </div>
-                  )}
-
-                  {showField('environmental_compliance') && (
-                    <div className="input-group">
-                      <label className="input-label flex items-center gap-2">
-                        Environmental & Statutory Compliance
-                        <Info size={14} style={{ color: 'var(--muted)' }} />
-                      </label>
-                      <select
-                        className="input-field"
-                        value={qualitative.factory_visit.environmental_compliance}
-                        onChange={(e) => handleQualitativeChange('factory_visit', 'environmental_compliance', e.target.value)}
-                      >
-                        <option value="">Select...</option>
-                        <option value="full_compliance">Full Compliance - All Clearances</option>
-                        <option value="mostly_compliant">Mostly Compliant - Minor Gaps</option>
-                        <option value="partial_compliance">Partial Compliance - Action Required</option>
-                        <option value="non_compliant">Non-Compliant - Major Concerns</option>
-                      </select>
-                      {form.sector === 'Manufacturing' && (
-                        <p className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
-                          Check: Pollution Control Board consent, Factory license, Fire NOC
-                        </p>
-                      )}
-                      {form.sector === 'Healthcare' && (
-                        <p className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
-                          Check: NABH/NABL accreditation, Biomedical waste management, Drug license
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="input-group">
-                    <label className="input-label">Collateral Verification (if applicable)</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.factory_visit.collateral_verification}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'collateral_verification', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="verified_adequate">Verified & Adequate Value</option>
-                      <option value="verified_marginal">Verified but Marginal Value</option>
-                      <option value="not_verified">Not Verified Yet</option>
-                      <option value="not_applicable">Not Applicable</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Overall Impression of Site</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.factory_visit.overall_impression}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'overall_impression', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="very_positive">Very Positive</option>
-                      <option value="positive">Positive</option>
-                      <option value="neutral">Neutral</option>
-                      <option value="negative">Negative</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">
-                      Specific Observations (Free Text)
-                      <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
-                        {qualitative.factory_visit.specific_observations.length}/1000 characters
-                      </span>
-                    </label>
-                    <textarea
-                      className="input-field"
-                      rows="4"
-                      maxLength="1000"
-                      placeholder="Detailed observations from the site visit..."
-                      value={qualitative.factory_visit.specific_observations}
-                      onChange={(e) => handleQualitativeChange('factory_visit', 'specific_observations', e.target.value)}
-                    />
-                  </div>
-                </>
-              ) : (
-                <div className="p-6 rounded-lg text-center" style={{ background: 'var(--surface-elevated)' }}>
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                    {qualitative.factory_visit.visit_conducted === 'not_applicable' 
-                      ? 'Site visit not applicable for this appraisal. Factory visit scoring will be neutral.'
-                      : 'Site visit not conducted. Factory visit scoring will be neutral.'}
-                  </p>
-                </div>
-              )}
+            {/* Tabs */}
+            <div className="flex gap-2 mb-6 border-b" style={{ borderColor: 'var(--border)' }}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('factory')}
+                className={`flex items-center gap-2 px-4 py-3 font-semibold text-sm transition-all ${
+                  activeTab === 'factory' ? 'border-b-2' : ''
+                }`}
+                style={{
+                  color: activeTab === 'factory' ? 'var(--accent)' : 'var(--muted)',
+                  borderColor: activeTab === 'factory' ? 'var(--accent)' : 'transparent'
+                }}
+              >
+                <Eye size={16} />
+                Factory / Site Visit
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('management')}
+                className={`flex items-center gap-2 px-4 py-3 font-semibold text-sm transition-all ${
+                  activeTab === 'management' ? 'border-b-2' : ''
+                }`}
+                style={{
+                  color: activeTab === 'management' ? 'var(--accent)' : 'var(--muted)',
+                  borderColor: activeTab === 'management' ? 'var(--accent)' : 'transparent'
+                }}
+              >
+                <Users size={16} />
+                Management Interview
+              </button>
             </div>
-          )}
 
-          {/* Management Interview Tab */}
-          {activeTab === 'management' && (
-            <div className="space-y-5 animate-slide-up">
-              <div className="input-group">
-                <label className="input-label">Was a management interview conducted?</label>
-                <div className="flex gap-4">
-                  {['yes', 'no'].map(opt => (
-                    <label key={opt} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="interview_conducted"
-                        value={opt}
-                        checked={qualitative.management_interview.interview_conducted === opt}
-                        onChange={(e) => handleQualitativeChange('management_interview', 'interview_conducted', e.target.value)}
-                        className="w-4 h-4"
-                      />
-                      <span className="text-sm capitalize" style={{ color: 'var(--text)' }}>
-                        {opt}
-                      </span>
-                    </label>
-                  ))}
+            {/* Factory Visit Tab */}
+            {activeTab === 'factory' && (
+              <div className="space-y-5 animate-slide-up">
+                <div className="input-group">
+                  <label className="input-label">Was a site visit conducted?</label>
+                  <div className="flex gap-4">
+                    {['yes', 'no', 'not_applicable'].map(opt => (
+                      <label key={opt} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="visit_conducted"
+                          value={opt}
+                          checked={qualitative.factory_visit.visit_conducted === opt}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'visit_conducted', e.target.value)}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-sm capitalize" style={{ color: 'var(--text)' }}>
+                          {opt.replace('_', ' ')}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              {qualitative.management_interview.interview_conducted === 'yes' ? (
-                <>
-                  <div className="grid grid-cols-2 gap-5">
-                    <div className="input-group">
-                      <label className="input-label">Interview Date</label>
-                      <input
-                        type="date"
-                        className="input-field"
-                        value={qualitative.management_interview.interview_date}
-                        onChange={(e) => handleQualitativeChange('management_interview', 'interview_date', e.target.value)}
-                      />
+                {qualitative.factory_visit.visit_conducted === 'yes' ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-5">
+                      <div className="input-group">
+                        <label className="input-label">Visit Date</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={qualitative.factory_visit.visit_date}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'visit_date', e.target.value)}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Visited By (Name & Designation)</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="e.g. John Doe - Senior Credit Officer"
+                          value={qualitative.factory_visit.visited_by}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'visited_by', e.target.value)}
+                        />
+                      </div>
                     </div>
+
                     <div className="input-group">
-                      <label className="input-label">Persons Interviewed (Names & Designations)</label>
-                      <input
-                        type="text"
+                      <label className="input-label">Type of Premises Visited</label>
+                      <select
                         className="input-field"
-                        placeholder="e.g. Rajesh Kumar (MD), Priya Singh (CFO)"
-                        value={qualitative.management_interview.persons_interviewed}
-                        onChange={(e) => handleQualitativeChange('management_interview', 'persons_interviewed', e.target.value)}
-                      />
+                        value={qualitative.factory_visit.premises_type}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'premises_type', e.target.value)}
+                      >
+                        <option value="">Select premises type...</option>
+                        {form.sector && PREMISES_OPTIONS[form.sector]?.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
                     </div>
-                  </div>
 
-                  <div className="input-group">
-                    <label className="input-label">Promoter / Management Experience in Industry</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.promoter_experience}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'promoter_experience', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="more_than_15">More than 15 years</option>
-                      <option value="10_to_15">10-15 years</option>
-                      <option value="5_to_10">5-10 years</option>
-                      <option value="less_than_5">Less than 5 years</option>
-                    </select>
-                  </div>
+                    {showField('capacity_utilization') && (
+                      <div className="input-group">
+                        <label className="input-label">Capacity Utilization</label>
+                        <select
+                          className="input-field"
+                          value={qualitative.factory_visit.capacity_utilization}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'capacity_utilization', e.target.value)}
+                        >
+                          <option value="">Select...</option>
+                          <option value="above_80">Above 80% - Excellent</option>
+                          <option value="60_to_80">60-80% - Good</option>
+                          <option value="40_to_60">40-60% - Moderate</option>
+                          <option value="below_40">Below 40% - Poor</option>
+                        </select>
+                      </div>
+                    )}
 
-                  <div className="input-group">
-                    <label className="input-label">Second Line Management Strength</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.second_line_management}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'second_line_management', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="strong">Strong - Qualified Team in Place</option>
-                      <option value="adequate">Adequate</option>
-                      <option value="weak">Weak - Key Man Risk</option>
-                      <option value="single_person">Single Person Dependency</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Transparency & Information Quality</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.transparency}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'transparency', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="very_transparent">Very Transparent - Proactive Disclosure</option>
-                      <option value="transparent">Transparent</option>
-                      <option value="guarded">Guarded - Limited Information</option>
-                      <option value="not_cooperative">Not Cooperative</option>
-                    </select>
-                  </div>
-
-                  <div className="input-group">
-                    <label className="input-label">Business Vision & Strategy</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.business_vision}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'business_vision', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="clear">Clear & Achievable Plans</option>
-                      <option value="moderate">Moderate Clarity</option>
-                      <option value="vague">Vague</option>
-                      <option value="no_direction">No Clear Direction</option>
-                    </select>
-                  </div>
-
-                  {showField('order_book_visibility') && (
                     <div className="input-group">
                       <label className="input-label">
-                        {['Technology', 'NBFC'].includes(form.sector) 
-                          ? 'Customer Pipeline & Conversion Visibility'
-                          : 'Order Book / Revenue Visibility'}
+                        {form.sector === 'Manufacturing' ? 'Machinery & Asset Condition' 
+                         : form.sector === 'Healthcare' ? 'Equipment & Facility Condition'
+                         : form.sector === 'Technology' ? 'IT Infrastructure Condition'
+                         : 'Asset Condition'}
                       </label>
                       <select
                         className="input-field"
-                        value={qualitative.management_interview.order_book_visibility}
-                        onChange={(e) => handleQualitativeChange('management_interview', 'order_book_visibility', e.target.value)}
+                        value={qualitative.factory_visit.asset_condition}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'asset_condition', e.target.value)}
                       >
                         <option value="">Select...</option>
-                        <option value="more_than_6_months">More than 6 months visibility</option>
-                        <option value="3_to_6_months">3-6 months visibility</option>
-                        <option value="1_to_3_months">1-3 months visibility</option>
-                        <option value="uncertain">Uncertain / Spot Business</option>
+                        <option value="modern_well_maintained">Modern & Well Maintained</option>
+                        <option value="adequate">Adequate - Regular Maintenance Visible</option>
+                        <option value="average">Average - Some Aging Visible</option>
+                        <option value="poor">Poor - Maintenance Concerns</option>
                       </select>
                     </div>
-                  )}
 
-                  <div className="input-group">
-                    <label className="input-label">Promoter Skin in the Game (Contribution %)</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.promoter_contribution}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'promoter_contribution', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="more_than_33">More than 33% - Strong Commitment</option>
-                      <option value="25_to_33">25-33% - Adequate</option>
-                      <option value="15_to_25">15-25% - Minimum RBI Requirement</option>
-                      <option value="below_15">Below 15% - Concern</option>
-                      <option value="none">No Contribution</option>
-                    </select>
-                  </div>
+                    <div className="input-group">
+                      <label className="input-label">
+                        {form.sector === 'Technology' ? 'Employee Strength & Attrition'
+                         : form.sector === 'Healthcare' ? 'Staff Strength & Quality'
+                         : 'Workforce Observations'}
+                      </label>
+                      <select
+                        className="input-field"
+                        value={qualitative.factory_visit.workforce_observations}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'workforce_observations', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="adequate_skilled">Adequate & Skilled</option>
+                        <option value="adequate_training_needed">Adequate but Training Needed</option>
+                        <option value="understaffed">Understaffed</option>
+                        <option value="high_attrition">High Attrition Concern</option>
+                      </select>
+                    </div>
 
-                  <div className="input-group">
-                    <label className="input-label">Related Party Transactions & Concerns</label>
-                    <select
-                      className="input-field"
-                      value={qualitative.management_interview.related_party_concerns}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'related_party_concerns', e.target.value)}
-                    >
-                      <option value="">Select...</option>
-                      <option value="none">None - Clean Structure</option>
-                      <option value="minor">Minor - Well Disclosed</option>
-                      <option value="moderate">Moderate - Needs Monitoring</option>
-                      <option value="significant">Significant Concerns</option>
-                      <option value="undisclosed">Undisclosed / Hidden</option>
-                    </select>
-                  </div>
+                    {showField('inventory_levels') && (
+                      <div className="input-group">
+                        <label className="input-label">Inventory Levels & Management</label>
+                        <select
+                          className="input-field"
+                          value={qualitative.factory_visit.inventory_levels}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'inventory_levels', e.target.value)}
+                        >
+                          <option value="">Select...</option>
+                          <option value="optimal">Optimal - Well Organized</option>
+                          <option value="adequate">Adequate</option>
+                          <option value="excess">Excess Inventory - Blockage Concern</option>
+                          <option value="depleted">Depleted - Supply Chain Issues</option>
+                        </select>
+                      </div>
+                    )}
 
-                  <div className="input-group">
-                    <label className="input-label">
-                      Key Positives from Interview
-                      <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
-                        {qualitative.management_interview.key_positives.length}/500 characters
-                      </span>
-                    </label>
-                    <textarea
-                      className="input-field"
-                      rows="3"
-                      maxLength="500"
-                      placeholder="Key strengths observed during the interview..."
-                      value={qualitative.management_interview.key_positives}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'key_positives', e.target.value)}
-                    />
-                  </div>
+                    {showField('environmental_compliance') && (
+                      <div className="input-group">
+                        <label className="input-label flex items-center gap-2">
+                          Environmental & Statutory Compliance
+                          <Info size={14} style={{ color: 'var(--muted)' }} />
+                        </label>
+                        <select
+                          className="input-field"
+                          value={qualitative.factory_visit.environmental_compliance}
+                          onChange={(e) => handleQualitativeChange('factory_visit', 'environmental_compliance', e.target.value)}
+                        >
+                          <option value="">Select...</option>
+                          <option value="full_compliance">Full Compliance - All Clearances</option>
+                          <option value="mostly_compliant">Mostly Compliant - Minor Gaps</option>
+                          <option value="partial_compliance">Partial Compliance - Action Required</option>
+                          <option value="non_compliant">Non-Compliant - Major Concerns</option>
+                        </select>
+                        {form.sector === 'Manufacturing' && (
+                          <p className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
+                            Check: Pollution Control Board consent, Factory license, Fire NOC
+                          </p>
+                        )}
+                        {form.sector === 'Healthcare' && (
+                          <p className="text-xs mt-2" style={{ color: 'var(--muted)' }}>
+                            Check: NABH/NABL accreditation, Biomedical waste management, Drug license
+                          </p>
+                        )}
+                      </div>
+                    )}
 
-                  <div className="input-group">
-                    <label className="input-label">
-                      Key Concerns from Interview
-                      <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
-                        {qualitative.management_interview.key_concerns.length}/500 characters
-                      </span>
-                    </label>
-                    <textarea
-                      className="input-field"
-                      rows="3"
-                      maxLength="500"
-                      placeholder="Risk factors or concerns noted during the interview..."
-                      value={qualitative.management_interview.key_concerns}
-                      onChange={(e) => handleQualitativeChange('management_interview', 'key_concerns', e.target.value)}
-                    />
+                    <div className="input-group">
+                      <label className="input-label">Collateral Verification (if applicable)</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.factory_visit.collateral_verification}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'collateral_verification', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="verified_adequate">Verified & Adequate Value</option>
+                        <option value="verified_marginal">Verified but Marginal Value</option>
+                        <option value="not_verified">Not Verified Yet</option>
+                        <option value="not_applicable">Not Applicable</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Overall Impression of Site</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.factory_visit.overall_impression}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'overall_impression', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="very_positive">Very Positive</option>
+                        <option value="positive">Positive</option>
+                        <option value="neutral">Neutral</option>
+                        <option value="negative">Negative</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">
+                        Specific Observations (Free Text)
+                        <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
+                          {qualitative.factory_visit.specific_observations.length}/1000 characters
+                        </span>
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows="4"
+                        maxLength="1000"
+                        placeholder="Detailed observations from the site visit..."
+                        value={qualitative.factory_visit.specific_observations}
+                        onChange={(e) => handleQualitativeChange('factory_visit', 'specific_observations', e.target.value)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-6 rounded-lg text-center" style={{ background: 'var(--surface-elevated)' }}>
+                    <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                      {qualitative.factory_visit.visit_conducted === 'not_applicable' 
+                        ? 'Site visit not applicable for this appraisal. Factory visit scoring will be neutral.'
+                        : 'Site visit not conducted. Factory visit scoring will be neutral.'}
+                    </p>
                   </div>
-                </>
-              ) : (
-                <div className="p-6 rounded-lg text-center" style={{ background: 'var(--surface-elevated)' }}>
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                    Management interview not conducted. Management interview scoring will be neutral.
-                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Management Interview Tab */}
+            {activeTab === 'management' && (
+              <div className="space-y-5 animate-slide-up">
+                <div className="input-group">
+                  <label className="input-label">Was a management interview conducted?</label>
+                  <div className="flex gap-4">
+                    {['yes', 'no'].map(opt => (
+                      <label key={opt} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="interview_conducted"
+                          value={opt}
+                          checked={qualitative.management_interview.interview_conducted === opt}
+                          onChange={(e) => handleQualitativeChange('management_interview', 'interview_conducted', e.target.value)}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-sm capitalize" style={{ color: 'var(--text)' }}>
+                          {opt}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
-              )}
+
+                {qualitative.management_interview.interview_conducted === 'yes' ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-5">
+                      <div className="input-group">
+                        <label className="input-label">Interview Date</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={qualitative.management_interview.interview_date}
+                          onChange={(e) => handleQualitativeChange('management_interview', 'interview_date', e.target.value)}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Persons Interviewed (Names & Designations)</label>
+                        <input
+                          type="text"
+                          className="input-field"
+                          placeholder="e.g. Rajesh Kumar (MD), Priya Singh (CFO)"
+                          value={qualitative.management_interview.persons_interviewed}
+                          onChange={(e) => handleQualitativeChange('management_interview', 'persons_interviewed', e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Promoter / Management Experience in Industry</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.promoter_experience}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'promoter_experience', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="more_than_15">More than 15 years</option>
+                        <option value="10_to_15">10-15 years</option>
+                        <option value="5_to_10">5-10 years</option>
+                        <option value="less_than_5">Less than 5 years</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Second Line Management Strength</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.second_line_management}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'second_line_management', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="strong">Strong - Qualified Team in Place</option>
+                        <option value="adequate">Adequate</option>
+                        <option value="weak">Weak - Key Man Risk</option>
+                        <option value="single_person">Single Person Dependency</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Transparency & Information Quality</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.transparency}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'transparency', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="very_transparent">Very Transparent - Proactive Disclosure</option>
+                        <option value="transparent">Transparent</option>
+                        <option value="guarded">Guarded - Limited Information</option>
+                        <option value="not_cooperative">Not Cooperative</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Business Vision & Strategy</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.business_vision}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'business_vision', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="clear">Clear & Achievable Plans</option>
+                        <option value="moderate">Moderate Clarity</option>
+                        <option value="vague">Vague</option>
+                        <option value="no_direction">No Clear Direction</option>
+                      </select>
+                    </div>
+
+                    {showField('order_book_visibility') && (
+                      <div className="input-group">
+                        <label className="input-label">
+                          {['Technology', 'NBFC'].includes(form.sector) 
+                            ? 'Customer Pipeline & Conversion Visibility'
+                            : 'Order Book / Revenue Visibility'}
+                        </label>
+                        <select
+                          className="input-field"
+                          value={qualitative.management_interview.order_book_visibility}
+                          onChange={(e) => handleQualitativeChange('management_interview', 'order_book_visibility', e.target.value)}
+                        >
+                          <option value="">Select...</option>
+                          <option value="more_than_6_months">More than 6 months visibility</option>
+                          <option value="3_to_6_months">3-6 months visibility</option>
+                          <option value="1_to_3_months">1-3 months visibility</option>
+                          <option value="uncertain">Uncertain / Spot Business</option>
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="input-group">
+                      <label className="input-label">Promoter Skin in the Game (Contribution %)</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.promoter_contribution}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'promoter_contribution', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="more_than_33">More than 33% - Strong Commitment</option>
+                        <option value="25_to_33">25-33% - Adequate</option>
+                        <option value="15_to_25">15-25% - Minimum RBI Requirement</option>
+                        <option value="below_15">Below 15% - Concern</option>
+                        <option value="none">No Contribution</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">Related Party Transactions & Concerns</label>
+                      <select
+                        className="input-field"
+                        value={qualitative.management_interview.related_party_concerns}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'related_party_concerns', e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        <option value="none">None - Clean Structure</option>
+                        <option value="minor">Minor - Well Disclosed</option>
+                        <option value="moderate">Moderate - Needs Monitoring</option>
+                        <option value="significant">Significant Concerns</option>
+                        <option value="undisclosed">Undisclosed / Hidden</option>
+                      </select>
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">
+                        Key Positives from Interview
+                        <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
+                          {qualitative.management_interview.key_positives.length}/500 characters
+                        </span>
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows="3"
+                        maxLength="500"
+                        placeholder="Key strengths observed during the interview..."
+                        value={qualitative.management_interview.key_positives}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'key_positives', e.target.value)}
+                      />
+                    </div>
+
+                    <div className="input-group">
+                      <label className="input-label">
+                        Key Concerns from Interview
+                        <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
+                          {qualitative.management_interview.key_concerns.length}/500 characters
+                        </span>
+                      </label>
+                      <textarea
+                        className="input-field"
+                        rows="3"
+                        maxLength="500"
+                        placeholder="Risk factors or concerns noted during the interview..."
+                        value={qualitative.management_interview.key_concerns}
+                        onChange={(e) => handleQualitativeChange('management_interview', 'key_concerns', e.target.value)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div className="p-6 rounded-lg text-center" style={{ background: 'var(--surface-elevated)' }}>
+                    <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                      Management interview not conducted. Management interview scoring will be neutral.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between mt-8">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(3)}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <ArrowLeft size={16} />
+                <span>Back</span>
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="btn-primary flex items-center gap-3 px-10"
+              >
+                {loading ? (
+                  <>
+                    <div className="spinner"></div>
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Start Appraisal</span>
+                    <span className="text-lg">→</span>
+                  </>
+                )}
+              </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Error Display */}
         {error && (
@@ -877,7 +1407,7 @@ export default function NewAppraisal() {
               </div>
               <div>
                 <p className="text-sm font-semibold mb-1" style={{ color: 'var(--danger)' }}>
-                  Submission Error
+                  {currentStep < 3 ? 'Validation Error' : 'Submission Error'}
                 </p>
                 <p className="text-xs" style={{ color: 'var(--danger-dark)' }}>
                   {error}
@@ -886,34 +1416,6 @@ export default function NewAppraisal() {
             </div>
           </div>
         )}
-
-        {/* Submit Button */}
-        <div className="flex items-center justify-between pt-6 animate-slide-up" style={{ animationDelay: '400ms' }}>
-          <button
-            type="button"
-            onClick={() => navigate('/dashboard')}
-            className="btn-secondary"
-          >
-            ← Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary flex items-center gap-3 px-10"
-          >
-            {loading ? (
-              <>
-                <div className="spinner"></div>
-                <span>Processing...</span>
-              </>
-            ) : (
-              <>
-                <span>Start Appraisal</span>
-                <span className="text-lg">→</span>
-              </>
-            )}
-          </button>
-        </div>
       </form>
     </div>
   )

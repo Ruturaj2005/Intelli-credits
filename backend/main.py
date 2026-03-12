@@ -37,6 +37,35 @@ from models.schemas import (
     AppraisalResultsResponse,
     AppraisalStartResponse,
     AppraisalStatusResponse,
+    ConfidenceLevel,
+    DetectedDocument,
+    UploadAndClassifyResponse,
+    ConfirmedClassification,
+    ConfirmClassificationRequest,
+    ConfirmClassificationResponse,
+    AlternativeClassification,
+    DocumentSchemaMapping,
+    SchemaSelectionRequest,
+    SchemaSelectionResponse,
+)
+from modules.entity_onboarding import (
+    EntityProfile,
+    EntityProfileResponse,
+    LoanApplication,
+    LoanApplicationResponse,
+    generate_entity_id,
+    generate_application_id,
+    get_required_documents,
+    validate_entity_profile,
+)
+from tools.document_intelligence.document_classifier import (
+    DocumentType,
+    classify_document_type,
+)
+from tools.schema_mapper import (
+    SchemaTemplate,
+    SchemaMapper,
+    SCHEMA_REGISTRY,
 )
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -194,7 +223,41 @@ app.add_middleware(
 # ─── Background Task ──────────────────────────────────────────────────────────
 
 async def _run_pipeline(job_id: str, initial_state: Dict[str, Any]):
-    """Background task: run the orchestrator and persist updates."""
+    """
+    Background task: run the orchestrator and persist updates.
+    
+    Enhanced to support entity onboarding - loads entity_profile and loan_application
+    from MongoDB if application_id is provided in initial_state.
+    """
+    
+    # ─── Load Entity Profile & Loan Application (if available) ────────────────
+    application_id = initial_state.get("application_id")
+    if application_id:
+        database = get_db()
+        
+        # Load loan application
+        application_doc = await database.loan_applications.find_one({"application_id": application_id})
+        if application_doc:
+            initial_state["loan_application"] = application_doc.get("loan_application", {})
+            initial_state["required_documents"] = application_doc.get("required_documents", [])
+            
+            # Load linked entity profile
+            entity_id = application_doc.get("entity_id")
+            if entity_id:
+                entity_doc = await database.entity_profiles.find_one({"entity_id": entity_id})
+                if entity_doc:
+                    initial_state["entity_profile"] = entity_doc.get("profile", {})
+                    
+                    # Override/merge company_name and sector from entity profile if not set
+                    if not initial_state.get("company_name"):
+                        initial_state["company_name"] = entity_doc.get("profile", {}).get("company_name", "")
+                    if not initial_state.get("sector"):
+                        initial_state["sector"] = entity_doc.get("profile", {}).get("sector", "")
+                    
+                    # Add additional entity context for agents  
+                    initial_state["cin"] = entity_doc.get("profile", {}).get("cin")
+                    initial_state["pan"] = entity_doc.get("profile", {}).get("pan")
+                    initial_state["annual_turnover"] = entity_doc.get("profile", {}).get("annual_turnover")
 
     async def on_update(state: Dict[str, Any]):
         await save_job(job_id, state)
@@ -221,9 +284,577 @@ async def _run_pipeline(job_id: str, initial_state: Dict[str, Any]):
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTITY ONBOARDING ENDPOINTS (NEW)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/onboarding/entity", response_model=EntityProfileResponse)
+async def create_entity_profile(profile: EntityProfile):
+    """
+    Step 1: Create entity profile with CIN/PAN validation.
+    Generates unique entity_id and saves to MongoDB.
+    """
+    # Generate unique entity ID
+    entity_id = generate_entity_id()
+    
+    # Validate entity profile
+    validations = validate_entity_profile(profile)
+    
+    # Check if validation passed
+    validation_status = "validated"
+    if any("invalid" in v.lower() for v in validations.values()):
+        validation_status = "validation_failed"
+    
+    # Prepare document for MongoDB
+    entity_data = {
+        "entity_id": entity_id,
+        "profile": profile.model_dump(),
+        "validations": validations,
+        "created_at": datetime.now().isoformat(),
+        "status": validation_status,
+    }
+    
+    # Save to MongoDB
+    database = get_db()
+    try:
+        await database.entity_profiles.insert_one(entity_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+    return EntityProfileResponse(
+        entity_id=entity_id,
+        status=validation_status,
+        message="Entity profile created successfully" if validation_status == "validated" 
+                else "Entity profile created with validation warnings",
+        validations=validations
+    )
+
+
+@app.post("/api/onboarding/loan-application", response_model=LoanApplicationResponse)
+async def create_loan_application(
+    entity_id: str = Form(...),
+    loan_type: str = Form(...),
+    loan_amount: float = Form(...),
+    loan_tenure_months: int = Form(...),
+    expected_interest_rate: Optional[float] = Form(None),
+    purpose: str = Form(...),
+    collateral_offered: Optional[str] = Form(None),
+    existing_banking_relationship: Optional[bool] = Form(False),
+):
+    """
+    Step 2: Create loan application linked to entity profile.
+    Returns context-aware required documents list based on loan_type.
+    """
+    # Validate entity exists
+    database = get_db()
+    entity = await database.entity_profiles.find_one({"entity_id": entity_id})
+    
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"Entity profile not found: {entity_id}")
+    
+    # Create loan application model
+    try:
+        loan_app = LoanApplication(
+            loan_type=loan_type,
+            loan_amount=loan_amount,
+            loan_tenure_months=loan_tenure_months,
+            expected_interest_rate=expected_interest_rate,
+            purpose=purpose,
+            collateral_offered=collateral_offered,
+            existing_banking_relationship=existing_banking_relationship,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {str(e)}")
+    
+    # Generate application ID
+    application_id = generate_application_id()
+    
+    # Get required documents based on loan type
+    from modules.entity_onboarding import LoanType
+    loan_type_enum = LoanType(loan_type)
+    required_docs = get_required_documents(loan_type_enum)
+    
+    # Prepare application document
+    application_data = {
+        "application_id": application_id,
+        "entity_id": entity_id,
+        "loan_application": loan_app.model_dump(),
+        "required_documents": required_docs,
+        "status": "pending_documents",
+        "created_at": datetime.now().isoformat(),
+    }
+    
+    # Save to MongoDB
+    try:
+        await database.loan_applications.insert_one(application_data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
+    return LoanApplicationResponse(
+        application_id=application_id,
+        entity_id=entity_id,
+        status="pending_documents",
+        message="Loan application submitted successfully",
+        next_step="document_upload",
+        required_documents=required_docs
+    )
+
+
+@app.get("/api/onboarding/entity/{entity_id}")
+async def get_entity_profile(entity_id: str):
+    """Retrieve entity profile by ID"""
+    database = get_db()
+    entity = await database.entity_profiles.find_one({"entity_id": entity_id})
+    
+    if not entity:
+        raise HTTPException(status_code=404, detail=f"Entity profile not found: {entity_id}")
+    
+    # Remove MongoDB _id field
+    entity.pop("_id", None)
+    return entity
+
+
+@app.get("/api/onboarding/application/{application_id}")
+async def get_loan_application(application_id: str):
+    """Retrieve loan application by ID"""
+    database = get_db()
+    application = await database.loan_applications.find_one({"application_id": application_id})
+    
+    if not application:
+        raise HTTPException(status_code=404, detail=f"Loan application not found: {application_id}")
+    
+    # Remove MongoDB _id field
+    application.pop("_id", None)
+    return application
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DOCUMENT CLASSIFICATION REVIEW ENDPOINTS (HUMAN-IN-THE-LOOP)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/documents/upload-and-classify", response_model=UploadAndClassifyResponse)
+async def upload_and_classify_documents(
+    application_id: str = Form(...),
+    files: List[UploadFile] = File(...),
+):
+    """
+    Upload documents and classify them using AI with confidence scoring.
+    Returns classification results for user review before pipeline execution.
+    
+    This implements the human-in-the-loop workflow for the hackathon.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    
+    # Create upload directory for this application
+    app_upload_dir = UPLOAD_DIR / application_id
+    app_upload_dir.mkdir(parents=True, exist_ok=True)
+    
+    detected_documents = []
+    auto_accept_count = 0
+    review_required_count = 0
+    
+    for idx, upload_file in enumerate(files):
+        if not upload_file.filename:
+            continue
+        
+        # Validate file size
+        content = await upload_file.read()
+        size_mb = len(content) / (1024 * 1024)
+        if size_mb > MAX_FILE_SIZE_MB:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{upload_file.filename} exceeds {MAX_FILE_SIZE_MB}MB limit.",
+            )
+        
+        # Save file to disk
+        safe_name = upload_file.filename.replace("/", "_").replace("\\", "_")
+        file_path = app_upload_dir / safe_name
+        with open(file_path, "wb") as f:
+            f.write(content)
+        
+        # Generate file ID
+        file_id = f"DOC_{application_id}_{idx+1:03d}"
+        
+        # Extract text for classification (simplified - in production would use PDF parser)
+        try:
+            if upload_file.filename.lower().endswith(".pdf"):
+                # Import here to avoid circular dependency
+                from tools.pdf_parser import extract_text_from_pdf
+                
+                text = extract_text_from_pdf(str(file_path))
+            else:
+                text = content.decode('utf-8', errors='ignore')
+        except Exception as e:
+            logger.warning(f"Failed to extract text from {upload_file.filename}: {e}")
+            text = ""
+        
+        # Classify document using extended classifier
+        try:
+            doc_type, confidence, reasoning, alternatives = classify_document_type(
+                text=text,
+                filename=upload_file.filename,
+                tables=None,
+                metadata=None
+            )
+            
+            # Determine confidence level
+            if confidence >= 0.70:
+                confidence_label = ConfidenceLevel.HIGH
+                requires_review = False
+                auto_accept_count += 1
+            elif confidence >= 0.50:
+                confidence_label = ConfidenceLevel.MEDIUM
+                requires_review = True
+                review_required_count += 1
+            else:
+                confidence_label = ConfidenceLevel.LOW
+                requires_review = True
+                review_required_count += 1
+            
+            # Format alternatives
+            alternative_classifications = [
+                AlternativeClassification(type=alt_type.value, confidence=alt_conf)
+                for alt_type, alt_conf in alternatives
+            ]
+            
+            detected_doc = DetectedDocument(
+                file_id=file_id,
+                file_name=upload_file.filename,
+                file_size=len(content),
+                auto_classification=doc_type.value if doc_type else "UNKNOWN",
+                confidence=round(confidence, 3),
+                confidence_label=confidence_label,
+                user_override_allowed=True,
+                classification_reasoning=reasoning,
+                alternative_classifications=alternative_classifications,
+                requires_review=requires_review
+            )
+            
+            detected_documents.append(detected_doc)
+            
+            logger.info(
+                f"Classified {upload_file.filename} as {doc_type.value if doc_type else 'UNKNOWN'} "
+                f"with confidence {confidence:.2f}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Classification error for {upload_file.filename}: {e}")
+            # Fallback to UNKNOWN
+            detected_doc = DetectedDocument(
+                file_id=file_id,
+                file_name=upload_file.filename,
+                file_size=len(content),
+                auto_classification="UNKNOWN",
+                confidence=0.35,
+                confidence_label=ConfidenceLevel.LOW,
+                user_override_allowed=True,
+                classification_reasoning="Classification failed - manual review required",
+                alternative_classifications=[],
+                requires_review=True
+            )
+            detected_documents.append(detected_doc)
+            review_required_count += 1
+    
+    # Determine if user review is required
+    requires_user_review = review_required_count > 0
+    
+    # Save file ID to filename mapping for later retrieval
+    mapping_file = app_upload_dir / ".file_mapping.json"
+    file_mapping = {
+        doc.file_id: doc.file_name
+        for doc in detected_documents
+    }
+    with open(mapping_file, "w") as f:
+        json.dump(file_mapping, f, indent=2)
+    
+    return UploadAndClassifyResponse(
+        application_id=application_id,
+        detected_documents=detected_documents,
+        requires_user_review=requires_user_review,
+        auto_accept_count=auto_accept_count,
+        review_required_count=review_required_count
+    )
+
+
+@app.post("/api/documents/confirm-classification", response_model=ConfirmClassificationResponse)
+async def confirm_document_classification(
+    request: ConfirmClassificationRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Confirm document classifications and start the appraisal pipeline.
+    
+    This endpoint receives user-confirmed classifications (with potential overrides)
+    and triggers the background pipeline execution.
+    """
+    application_id = request.application_id
+    
+    # Load application data
+    database = get_db()
+    application = await database.loan_applications.find_one({"application_id": application_id})
+    
+    if not application:
+        raise HTTPException(status_code=404, detail=f"Application not found: {application_id}")
+    
+    # Load entity profile
+    entity_id = application.get("entity_id")
+    entity = None
+    if entity_id:
+        entity = await database.entity_profiles.find_one({"entity_id": entity_id})
+    
+    # Generate job ID for pipeline
+    job_id = str(uuid.uuid4())
+    
+    # Build document classifications mapping
+    document_classifications = {}
+    for classification in request.classifications:
+        document_classifications[classification.file_id] = {
+            "confirmed_type": classification.confirmed_type,
+            "user_modified": classification.user_modified,
+            "user_comment": classification.user_comment,
+            "confirmed_at": datetime.now().isoformat()
+        }
+    
+    # Load uploaded files from disk
+    app_upload_dir = UPLOAD_DIR / application_id
+    if not app_upload_dir.exists():
+        raise HTTPException(status_code=404, detail="No documents found for this application")
+    
+    # Load file ID to filename mapping
+    mapping_file = app_upload_dir / ".file_mapping.json"
+    file_mapping = {}
+    if mapping_file.exists():
+        with open(mapping_file, "r") as f:
+            file_mapping = json.load(f)
+    
+    documents = []
+    for classification in request.classifications:
+        file_id = classification.file_id
+        confirmed_type = classification.confirmed_type
+        
+        # Get filename from mapping
+        filename = file_mapping.get(file_id)
+        if not filename:
+            logger.warning(f"No filename found for file_id {file_id}, skipping")
+            continue
+        
+        file_path = app_upload_dir / filename
+        if not file_path.exists():
+            logger.warning(f"File not found: {file_path}")
+            continue
+        
+        # Parse document using standard pipeline
+        try:
+            from tools.pdf_parser import parse_with_intelligence
+            
+            parsed = parse_with_intelligence(
+                str(file_path),
+                confirmed_type.lower(),  # Use confirmed type
+                use_advanced_pipeline=True
+            )
+            
+            # Add classification metadata
+            parsed["confirmed_classification"] = confirmed_type
+            parsed["file_id"] = file_id
+            parsed["filename"] = filename  # Add filename for reference
+            
+            documents.append(parsed)
+            
+        except Exception as e:
+            logger.error(f"Failed to parse {file_path}: {e}")
+            continue
+    
+    # Build initial state for pipeline
+    initial_state = {
+        "job_id": job_id,
+        "application_id": application_id,
+        "company_name": entity.get("profile", {}).get("company_name", "") if entity else "",
+        "sector": entity.get("profile", {}).get("sector", "") if entity else "",
+        "loan_amount_requested": application.get("loan_application", {}).get("loan_amount", 0.0),
+        "documents": documents,
+        "document_classifications": document_classifications,  # Store confirmed classifications
+        "selected_schemas": application.get("selected_schemas", {}),  # Schema selections from /api/schemas/select
+        "qualitative_inputs": request.qualitative_inputs or {},  # Store qualitative due diligence inputs
+        "entity_profile": entity.get("profile", {}) if entity else {},
+        "loan_application": application.get("loan_application", {}),
+        "extracted_financials": {},
+        "fraud_flags": [],
+        "research_findings": {},
+        "five_cs_scores": {},
+        "final_recommendation": {},
+        "arbitration_result": {},
+        "pre_override_scores": {},
+        "override_applied": False,
+        "cam_path": "",
+        "logs": [
+            {
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "agent": "SYSTEM",
+                "message": f"Classifications confirmed. {len(documents)} document(s) ready for analysis.",
+                "level": "INFO",
+            }
+        ],
+        "status": "QUEUED",
+        "conflict_detected": False,
+        "agent_statuses": {
+            "ingestor": "PENDING",
+            "research": "PENDING",
+            "scorer": "PENDING",
+            "cam_generator": "PENDING",
+        },
+        "started_at": datetime.now().isoformat(),
+        "completed_at": None,
+        "error_message": "",
+    }
+    
+    # Save job state
+    await save_job(job_id, initial_state)
+    
+    # Start pipeline in background
+    background_tasks.add_task(_run_pipeline, job_id, initial_state)
+    
+    return ConfirmClassificationResponse(
+        status="pipeline_started",
+        job_id=job_id,
+        websocket_url=f"/ws/{job_id}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCHEMA CONFIGURATION ENDPOINTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/schemas/list")
+async def list_schemas():
+    """
+    Get all available schema templates.
+    Returns complete template definitions with fields and metadata.
+    """
+    return {
+        "schemas": [
+            {
+                "template_id": template.template_id,
+                "template_name": template.template_name,
+                "description": template.description,
+                "applicable_document_types": template.applicable_document_types,
+                "field_count": len(template.fields),
+                "fields": [
+                    {
+                        "field_name": field.field_name,
+                        "field_label": field.field_label,
+                        "data_type": field.data_type,
+                        "required": field.required,
+                        "description": field.description,
+                        "extraction_hints": field.extraction_hints,
+                    }
+                    for field in template.fields
+                ],
+                "version": template.version,
+            }
+            for template in SCHEMA_REGISTRY.values()
+        ]
+    }
+
+
+@app.get("/api/schemas/recommend")
+async def recommend_schemas(document_type: str):
+    """
+    Get recommended schema templates for a specific document type.
+    Returns schemas in priority order.
+    
+    Query Parameters:
+        document_type: The DocumentType enum value (e.g., "ALM", "FINANCIAL_STATEMENT")
+    """
+    recommendations = SchemaMapper.get_recommended_schema(document_type)
+    
+    return {
+        "document_type": document_type,
+        "recommendations": [
+            {
+                "template_id": template.template_id,
+                "template_name": template.template_name,
+                "description": template.description,
+                "field_count": len(template.fields),
+                "applicable_document_types": template.applicable_document_types,
+                "fields": [
+                    {
+                        "field_name": field.field_name,
+                        "field_label": field.field_label,
+                        "data_type": field.data_type,
+                        "required": field.required,
+                        "description": field.description,
+                        "extraction_hints": field.extraction_hints,
+                    }
+                    for field in template.fields
+                ],
+            }
+            for template in recommendations
+        ],
+    }
+
+
+@app.post("/api/schemas/select", response_model=SchemaSelectionResponse)
+async def select_schemas(request: SchemaSelectionRequest):
+    """
+    Save user's schema selections for their documents.
+    This configures which schema template to use for extracting data from each document.
+    
+    The selected schemas are stored in the application record and will be used
+    during the extraction phase of the pipeline.
+    """
+    application_id = request.application_id
+    
+    # Load application
+    database = get_db()
+    application = await database.loan_applications.find_one({"application_id": application_id})
+    
+    if not application:
+        raise HTTPException(status_code=404, detail=f"Application not found: {application_id}")
+    
+    # Build schema configuration mapping
+    schema_config = {}
+    for mapping in request.document_schema_mapping:
+        # Validate schema exists
+        if mapping.selected_schema_id not in SCHEMA_REGISTRY:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid schema ID: {mapping.selected_schema_id}"
+            )
+        
+        schema_config[mapping.file_id] = {
+            "schema_id": mapping.selected_schema_id,
+            "schema_name": SCHEMA_REGISTRY[mapping.selected_schema_id].template_name,
+            "custom_hints": mapping.custom_hints or {},
+            "configured_at": datetime.now().isoformat()
+        }
+    
+    # Save to application document
+    await database.loan_applications.update_one(
+        {"application_id": application_id},
+        {
+            "$set": {
+                "selected_schemas": schema_config,
+                "schemas_configured_at": datetime.now().isoformat()
+            }
+        }
+    )
+    
+    return SchemaSelectionResponse(
+        status="schemas_configured",
+        application_id=application_id,
+        schemas_count=len(schema_config)
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# EXISTING APPRAISAL ENDPOINTS (UPDATED TO SUPPORT ENTITY ONBOARDING)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 @app.post("/api/appraisal/start", response_model=AppraisalStartResponse)
 async def start_appraisal(
     background_tasks: BackgroundTasks,
+    application_id: Optional[str] = Form(None),  # NEW: Link to entity onboarding
     company_name: str = Form(...),
     sector: str = Form(...),
     loan_amount: float = Form(0.0),
@@ -392,6 +1023,7 @@ async def start_appraisal(
     # ── Build initial state ───────────────────────────────────────────────────
     initial_state: Dict[str, Any] = {
         "job_id": job_id,
+        "application_id": application_id,  # Link to entity onboarding if provided
         "company_name": company_name.strip(),
         "sector": sector.strip(),
         "loan_amount_requested": loan_amount,

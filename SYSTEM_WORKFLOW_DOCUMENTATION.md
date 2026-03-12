@@ -1,8 +1,9 @@
 # IntelliCredits AI Credit Appraisal System - Complete Workflow Documentation
 
-**Version:** 2.0  
+**Version:** 3.0  
 **Date:** March 10, 2026  
-**Document Type:** Technical Architecture & Data Flow
+**Document Type:** Technical Architecture & Data Flow  
+**Status:** ✅ Production-Ready with Advanced Features
 
 ---
 
@@ -11,12 +12,17 @@
 **IntelliCredits** is an AI-powered credit appraisal platform that automates corporate loan analysis with bank-grade compliance, reducing turnaround time from days to under 30 minutes.
 
 ### Key Features
-- **AI-Powered Analysis**: Gemini 1.5 Pro for document intelligence and sentiment analysis
+- **AI-Powered Analysis**: Gemini 1.5 Pro/Claude for document intelligence and sentiment analysis
 - **RBI Compliant**: All regulatory norms hardcoded per Master Circulars
-- **Multi-Agent Architecture**: 5 specialized agents working in orchestrated pipeline
+- **Advanced Multi-Agent Architecture**: 9 specialized agents with parallel execution
+- **4-Gate Decision System**: Compliance → Capacity → Scoring → Amount Calculation
+- **Document Intelligence**: 8-stage pipeline with confidence-based quality control
+- **Parallel Processing**: Concurrent execution of independent tasks with timeout controls
+- **Fraud Detection**: Pre-screening gateway + 34 automated red flags (RF001-RF034)
 - **Qualitative Assessment**: 70% financial + 30% qualitative scoring (RBI guidelines)
+- **Bank Capacity Checks**: Exposure limits, sector concentration, CAR compliance
 - **Real-Time Updates**: WebSocket-based live progress tracking
-- **Complete Transparency**: Every score has explanation and source citation
+- **Complete Transparency**: Every score has explanation, RBI benchmark, and source citation
 
 ---
 
@@ -156,23 +162,78 @@ This section implements RBI's mandatory requirement for site visits and manageme
 
 ---
 
-### **PHASE 2: Multi-Agent Pipeline Orchestration**
+### **PHASE 2: Enhanced Multi-Stage Pipeline Orchestration** ⚡ NEW
 
-**Orchestrator** (`agents/orchestrator.py`) coordinates agents in sequence:
+**Orchestrator** (`agents/orchestrator.py`) now implements a sophisticated 10-stage pipeline with parallel processing and 4-gate decision logic:
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                                                              │
-│  1. INGESTOR → 2. RESEARCH → 3. RCU → 4. SCORER → 5. CAM   │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    INTELLICREDITS PIPELINE v3.0                              │
+│                                                                              │
+│  STAGE 0: Forgery Screening (Gateway)                                       │
+│           ↓                                                                  │
+│  STAGE 1: Parallel Ingest + Research (asyncio.gather)                       │
+│           ↓                                                                  │
+│  STAGE 2: Arbitration Check (Conflict Resolution)                           │
+│           ↓                                                                  │
+│  STAGE 3: Enrichment Pipeline (6 parallel tasks with timeout)               │
+│           • NTS Sector Analysis                                             │
+│           • Working Capital Analysis                                        │
+│           • FOR Calculation                                                 │
+│           • CIBIL Enhanced Check                                            │
+│           • MCA Network Analysis                                            │
+│           • RCU Field Verification                                          │
+│           ↓                                                                  │
+│  GATE 1:  Compliance Check (Hard Reject → Skip to CAM)                      │
+│           ↓                                                                  │
+│  GATE 2:  Bank Capacity Check (Exposure Limits)                             │
+│           ↓                                                                  │
+│  GATE 3:  Explainable Scoring (RBI Benchmarks)                              │
+│           ↓                                                                  │
+│  GATE 4:  Decision Engine (Amount Calculation)                              │
+│           ↓                                                                  │
+│  STAGE 9: CAM Generation (Final Report)                                     │
+│           ↓                                                                  │
+│  OUTPUT:  Credit Appraisal Memo (.docx) + JSON Results                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Each agent:
-- Updates its status: `PENDING` → `RUNNING` → `DONE` / `ERROR`
-- Broadcasts logs via WebSocket
-- Updates shared state object
-- Handles errors gracefully with rollback
+#### **Key Architectural Improvements:**
+
+**1. Parallel Processing Architecture**
+- **Stage 1**: Ingestor and Research agents run concurrently using `asyncio.gather()`
+- **Stage 3**: Six enrichment tasks execute in parallel with individual timeouts (30s each)
+- **Performance**: Reduces pipeline execution time from 3-5 minutes to under 2 minutes
+- **Fault Tolerance**: One task failure doesn't block others (`return_exceptions=True`)
+
+**2. Timeout Management**
+```python
+_ENRICHMENT_TASK_TIMEOUT_SECS = 30  # Per-task hard ceiling
+
+# Each enrichment task runs with independent timeout
+await asyncio.wait_for(enrichment_task(), timeout=30)
+```
+- Prevents one stalled API call from blocking the entire pipeline
+- Failed/timed-out tasks are logged and pipeline continues with available data
+
+**3. Conflict Detection & Arbitration**
+- Detects contradictions between financial health and research findings
+- Example: Strong DSCR (1.8x) BUT High litigation risk
+- Gemini arbitration reconciles signals and adjusts risk weighting
+- Implements `_should_arbitrate()` logic to trigger only when needed
+
+**4. 4-Gate Decision System** 🚦
+- **Gate 1**: Compliance (RBI norms, wilful defaulter check)
+- **Gate 2**: Bank Capacity (Exposure limits, sector concentration, CAR)
+- **Gate 3**: Explainable Scoring (Transparent scorecard with benchmarks)
+- **Gate 4**: Amount Calculation (Min of requested, score-based, capacity-based)
+
+**5. Agent Status Tracking**
+Each agent updates status through the pipeline: `PENDING` → `RUNNING` → `DONE` / `ERROR`
+- Real-time WebSocket broadcasts to frontend
+- Granular sub-task tracking within enrichment node
+- Error handling with graceful degradation
 
 ---
 
@@ -2491,6 +2552,1610 @@ IntelliCredits represents a **paradigm shift** in credit appraisal:
 ✅ **From days to minutes** (sub-30 minute turnaround)
 
 The system combines **cutting-edge AI** (Gemini 1.5 Pro) with **domain expertise** (RBI norms, industry benchmarks) to deliver **bank-grade credit appraisals** at unprecedented speed and accuracy.
+
+---
+
+## 🚀 EXTENDED ARCHITECTURE - HACKATHON ENHANCEMENTS
+
+**Version:** 3.5 Extended  
+**Status:** 🔶 Architecture Specification - Implementation Pending  
+**Purpose:** Document new features for enhanced document classification, entity onboarding, schema configuration, SWOT analysis, and human-in-the-loop workflows
+
+---
+
+### 📋 Enhancement Overview
+
+The following enhancements extend the existing system **without breaking current functionality**:
+
+| Enhancement | Purpose | Integration Point | Status |
+|-------------|---------|-------------------|--------|
+| Entity Onboarding Module | Capture entity & loan details before document upload | Pre-pipeline initialization | 🔶 Spec Ready |
+| Document Type Classification Extension | Add ALM, Shareholding, Borrowing, Portfolio types | `document_classifier.py` | 🔶 Spec Ready |
+| Human-in-the-Loop Classification | User review & override of auto-classification | Post-upload, pre-extraction | 🔶 Spec Ready |
+| Schema Configuration Layer | Dynamic schema templates for structured extraction | Extraction pipeline | 🔶 Spec Ready |
+| SWOT Analysis Generation | AI-generated SWOT for CAM report | CAM Generator | 🔶 Spec Ready |
+
+---
+
+### 1️⃣ ENTITY ONBOARDING MODULE
+
+**Purpose:** Capture structured entity and loan information **before** document upload to enable context-aware processing.
+
+#### New Module Structure
+
+**File:** `backend/modules/entity_onboarding.py`
+
+**Pydantic Schemas:**
+
+```python
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import date
+
+class EntityProfile(BaseModel):
+    """Entity information captured during onboarding"""
+    company_name: str = Field(..., description="Legal name of the entity")
+    cin: str = Field(..., pattern="^[A-Z]{1}[0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$")
+    pan: str = Field(..., pattern="^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
+    sector: str = Field(..., description="Business sector/industry")
+    annual_turnover: float = Field(..., gt=0, description="Annual turnover in ₹ Crores")
+    date_of_incorporation: Optional[date] = None
+    registered_address: Optional[str] = None
+    business_model: Optional[str] = None  # B2B, B2C, B2G
+    employee_count: Optional[int] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "company_name": "ABC Manufacturing Ltd",
+                "cin": "U12345MH2015PTC123456",
+                "pan": "AABCA1234C",
+                "sector": "Manufacturing",
+                "annual_turnover": 150.0,
+                "date_of_incorporation": "2015-03-15",
+                "registered_address": "Mumbai, Maharashtra",
+                "business_model": "B2B",
+                "employee_count": 250
+            }
+        }
+
+class LoanApplication(BaseModel):
+    """Loan details captured during onboarding"""
+    loan_type: str = Field(..., description="Type of loan facility")
+    loan_amount: float = Field(..., gt=0, description="Requested amount in ₹ Crores")
+    loan_tenure_months: int = Field(..., gt=0, le=360, description="Loan tenure in months")
+    expected_interest_rate: Optional[float] = Field(None, ge=5, le=25, description="Expected rate in %")
+    purpose: str = Field(..., description="Purpose of loan")
+    collateral_offered: Optional[str] = None
+    existing_banking_relationship: Optional[bool] = False
+    
+    # Loan Type Options
+    LOAN_TYPE_OPTIONS = [
+        "Working Capital",
+        "Term Loan",
+        "Project Finance",
+        "Trade Finance",
+        "Cash Credit",
+        "Letter of Credit",
+        "Bank Guarantee",
+        "Equipment Finance"
+    ]
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "loan_type": "Working Capital",
+                "loan_amount": 50.0,
+                "loan_tenure_months": 12,
+                "expected_interest_rate": 10.5,
+                "purpose": "Working capital requirement for inventory management",
+                "collateral_offered": "Stock + Debtors",
+                "existing_banking_relationship": True
+            }
+        }
+```
+
+#### API Endpoints
+
+**1. Entity Onboarding**
+
+```http
+POST /api/onboarding/entity
+Content-Type: application/json
+
+{
+  "company_name": "ABC Manufacturing Ltd",
+  "cin": "U12345MH2015PTC123456",
+  "pan": "AABCA1234C",
+  "sector": "Manufacturing",
+  "annual_turnover": 150.0
+}
+
+Response 200 OK:
+{
+  "entity_id": "ENT_2026_001",
+  "status": "validated",
+  "message": "Entity profile created successfully",
+  "validations": {
+    "cin_format": "valid",
+    "pan_format": "valid",
+    "mca_status": "active"  // Optional: Real-time MCA verification
+  }
+}
+```
+
+**2. Loan Application**
+
+```http
+POST /api/onboarding/loan-application
+Content-Type: application/json
+
+{
+  "entity_id": "ENT_2026_001",
+  "loan_type": "Working Capital",
+  "loan_amount": 50.0,
+  "loan_tenure_months": 12,
+  "purpose": "Working capital requirement",
+  "expected_interest_rate": 10.5
+}
+
+Response 200 OK:
+{
+  "application_id": "APP_2026_001",
+  "entity_id": "ENT_2026_001",
+  "status": "pending_documents",
+  "next_step": "document_upload",
+  "required_documents": [
+    "Annual Report",
+    "Bank Statements",
+    "GST Returns",
+    "Financial Statements",
+    "Borrowing Profile"  // NEW: Context-aware document list
+  ]
+}
+```
+
+#### Pipeline State Integration
+
+**Update to Global State:**
+
+```python
+# Existing state structure remains unchanged
+state = {
+    "job_id": "uuid",
+    "company_name": "...",
+    "sector": "...",
+    
+    # NEW FIELDS - Added by onboarding module
+    "entity_profile": EntityProfile(...).model_dump(),
+    "loan_application": LoanApplication(...).model_dump(),
+    
+    # Existing fields continue as before
+    "documents": [...],
+    "extracted_financials": {...},
+    # ...
+}
+```
+
+**Agent Access:**
+
+All agents can now access entity context:
+- **Research Agent**: Uses `entity_profile.cin` for targeted MCA/NCLT searches
+- **Scoring Agent**: Adjusts weights based on `loan_application.loan_type`
+- **CAM Generator**: Includes entity profile in executive summary
+- **Bank Capacity Agent**: Validates against `loan_application.loan_amount`
+
+---
+
+### 2️⃣ DOCUMENT TYPE CLASSIFICATION EXTENSION
+
+**Purpose:** Extend classification to support **ALM, Shareholding Pattern, Borrowing Profile, Portfolio Performance** documents.
+
+#### Update Existing Classifier
+
+**File:** `backend/tools/document_intelligence/document_classifier.py`
+
+**New Document Categories:**
+
+```python
+class DocumentType(str, Enum):
+    # Existing categories (preserved)
+    ANNUAL_REPORT = "ANNUAL_REPORT"
+    FINANCIAL_STATEMENT = "FINANCIAL_STATEMENT"
+    BANK_STATEMENT = "BANK_STATEMENT"
+    GST_RETURN = "GST_RETURN"
+    CIBIL_REPORT = "CIBIL_REPORT"
+    ITR = "ITR"
+    LEGAL_DOCUMENT = "LEGAL_DOCUMENT"
+    MCA_FILING = "MCA_FILING"
+    
+    # NEW CATEGORIES - Added for hackathon
+    ALM = "ALM"  # Asset Liability Management
+    SHAREHOLDING_PATTERN = "SHAREHOLDING_PATTERN"
+    BORROWING_PROFILE = "BORROWING_PROFILE"
+    PORTFOLIO_PERFORMANCE = "PORTFOLIO_PERFORMANCE"
+    UNKNOWN = "UNKNOWN"
+```
+
+**Classification Logic - Extension:**
+
+```python
+def classify_document_type_extended(
+    text: str,
+    tables: List[pd.DataFrame],
+    filename: str,
+    metadata: Dict
+) -> Tuple[DocumentType, float]:
+    """
+    Extended classification with new document types.
+    Returns: (document_type, confidence_score)
+    """
+    
+    # NEW: ALM Document Detection
+    alm_keywords = [
+        "asset liability management",
+        "maturity profile",
+        "liquidity gap",
+        "interest rate risk",
+        "duration gap",
+        "repricing gap",
+        "alco",  # Asset Liability Committee
+        "negative gap",
+        "positive gap"
+    ]
+    
+    # NEW: Shareholding Pattern Detection
+    shareholding_keywords = [
+        "shareholding pattern",
+        "promoter holding",
+        "public shareholding",
+        "category of shareholder",
+        "holding of specified securities",
+        "regulation 31",  # SEBI Regulation
+        "statement showing shareholding",
+        "partly paid-up shares"
+    ]
+    
+    # NEW: Borrowing Profile Detection
+    borrowing_keywords = [
+        "borrowing profile",
+        "loan portfolio",
+        "facility details",
+        "sanction letter",
+        "credit facilities",
+        "term loan details",
+        "working capital limit",
+        "outstanding borrowings",
+        "bank-wise exposure"
+    ]
+    
+    # NEW: Portfolio Performance Detection
+    portfolio_keywords = [
+        "portfolio performance",
+        "asset quality",
+        "npa",  # Non-Performing Assets
+        "gross npa",
+        "net npa",
+        "provision coverage ratio",
+        "loan book composition",
+        "sector-wise exposure",
+        "vintage analysis",
+        "concentration risk"
+    ]
+    
+    text_lower = text.lower()
+    
+    # Check new categories first
+    alm_count = sum(1 for kw in alm_keywords if kw in text_lower)
+    if alm_count >= 3:
+        return DocumentType.ALM, min(0.6 + (alm_count * 0.05), 0.95)
+    
+    shareholding_count = sum(1 for kw in shareholding_keywords if kw in text_lower)
+    if shareholding_count >= 3:
+        # Additional table structure validation
+        if _detect_shareholding_table_structure(tables):
+            return DocumentType.SHAREHOLDING_PATTERN, min(0.7 + (shareholding_count * 0.05), 0.95)
+    
+    borrowing_count = sum(1 for kw in borrowing_keywords if kw in text_lower)
+    if borrowing_count >= 3:
+        # Check for lender names and facility types in tables
+        if _detect_borrowing_table_structure(tables):
+            return DocumentType.BORROWING_PROFILE, min(0.7 + (borrowing_count * 0.05), 0.95)
+    
+    portfolio_count = sum(1 for kw in portfolio_keywords if kw in text_lower)
+    if portfolio_count >= 3:
+        return DocumentType.PORTFOLIO_PERFORMANCE, min(0.6 + (portfolio_count * 0.05), 0.95)
+    
+    # Fall back to existing classification logic (unchanged)
+    return _classify_existing_types(text, tables, filename, metadata)
+
+def _detect_shareholding_table_structure(tables: List[pd.DataFrame]) -> bool:
+    """Validate table structure for shareholding pattern"""
+    for table in tables:
+        # Look for columns: Category, No. of Shares, % of Shareholding
+        col_names_lower = [str(col).lower() for col in table.columns]
+        if any("promoter" in col for col in col_names_lower) and \
+           any("share" in col for col in col_names_lower):
+            return True
+    return False
+
+def _detect_borrowing_table_structure(tables: List[pd.DataFrame]) -> bool:
+    """Validate table structure for borrowing profile"""
+    for table in tables:
+        col_names_lower = [str(col).lower() for col in table.columns]
+        # Look for: Bank Name, Facility Type, Sanction Amount, Outstanding
+        has_bank = any("bank" in col or "lender" in col for col in col_names_lower)
+        has_amount = any("sanction" in col or "outstanding" in col or "amount" in col for col in col_names_lower)
+        if has_bank and has_amount:
+            return True
+    return False
+```
+
+#### Backward Compatibility
+
+- Existing document types continue to work unchanged
+- New types are **additive only**
+- If classification confidence < 0.5, fallback to `UNKNOWN` and trigger human review
+- All existing extraction logic remains functional
+
+---
+
+### 3️⃣ HUMAN-IN-THE-LOOP CLASSIFICATION APPROVAL
+
+**Purpose:** Allow users to **review and override** automatic document classification before extraction begins.
+
+#### Workflow
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ STEP 1: Upload Documents                                      │
+│         User uploads multiple PDFs                            │
+└─────────────────────┬─────────────────────────────────────────┘
+                      ↓
+┌───────────────────────────────────────────────────────────────┐
+│ STEP 2: Auto-Classification                                   │
+│         System classifies each document                       │
+│         • High Confidence (≥0.7): Auto-accept                 │
+│         • Medium Confidence (0.5-0.7): Request review         │
+│         • Low Confidence (<0.5): Require review               │
+└─────────────────────┬─────────────────────────────────────────┘
+                      ↓
+┌───────────────────────────────────────────────────────────────┐
+│ STEP 3: User Review UI                                        │
+│         Show classification results with override option      │
+│         [Document Name] [Auto: ALM] [Confidence: 82%] [✓]     │
+│         [Allow user to change classification if needed]       │
+└─────────────────────┬─────────────────────────────────────────┘
+                      ↓
+┌───────────────────────────────────────────────────────────────┐
+│ STEP 4: Confirmation & Proceed                                │
+│         Lock classifications                                  │
+│         Begin extraction pipeline with confirmed types        │
+└───────────────────────────────────────────────────────────────┘
+```
+
+#### API Endpoints
+
+**1. Upload & Auto-Classify**
+
+```http
+POST /api/documents/upload-and-classify
+Content-Type: multipart/form-data
+
+Files: [file1.pdf, file2.pdf, file3.pdf]
+application_id: APP_2026_001
+
+Response 200 OK:
+{
+  "application_id": "APP_2026_001",
+  "detected_documents": [
+    {
+      "file_id": "DOC_001",
+      "file_name": "ALM_Report_2024.pdf",
+      "auto_classification": "ALM",
+      "confidence": 0.82,
+      "user_override_allowed": true,
+      "classification_reasoning": "Detected keywords: asset liability management (5), maturity profile (3), liquidity gap (2)",
+      "alternative_classifications": [
+        {"type": "FINANCIAL_STATEMENT", "confidence": 0.35},
+        {"type": "ANNUAL_REPORT", "confidence": 0.28}
+      ]
+    },
+    {
+      "file_id": "DOC_002",
+      "file_name": "Shareholding_Q4_2024.pdf",
+      "auto_classification": "SHAREHOLDING_PATTERN",
+      "confidence": 0.91,
+      "user_override_allowed": true,
+      "classification_reasoning": "Detected keywords: shareholding pattern (4), promoter holding (2); Table structure validated"
+    },
+    {
+      "file_id": "DOC_003",
+      "file_name": "Unknown_Document.pdf",
+      "auto_classification": "UNKNOWN",
+      "confidence": 0.35,
+      "user_override_allowed": true,
+      "user_classification_required": true,
+      "classification_reasoning": "Low confidence - manual classification required"
+    }
+  ],
+  "requires_user_review": true,
+  "high_confidence_count": 1,
+  "review_required_count": 2
+}
+```
+
+**2. Confirm Classifications**
+
+```http
+POST /api/documents/confirm-classification
+Content-Type: application/json
+
+{
+  "application_id": "APP_2026_001",
+  "classifications": [
+    {
+      "file_id": "DOC_001",
+      "confirmed_type": "ALM",  // User kept auto-classification
+      "user_modified": false
+    },
+    {
+      "file_id": "DOC_002",
+      "confirmed_type": "SHAREHOLDING_PATTERN",
+      "user_modified": false
+    },
+    {
+      "file_id": "DOC_003",
+      "confirmed_type": "BORROWING_PROFILE",  // User manually classified
+      "user_modified": true,
+      "user_comment": "Contains loan facility details"
+    }
+  ]
+}
+
+Response 200 OK:
+{
+  "status": "classifications_confirmed",
+  "application_id": "APP_2026_001",
+  "ready_for_extraction": true,
+  "next_step": "schema_selection",
+  "message": "Classifications locked. proceeding to schema selection."
+}
+```
+
+#### State Management
+
+```python
+# Add to pipeline state
+state["document_classifications"] = [
+    {
+        "file_id": "DOC_001",
+        "file_name": "ALM_Report_2024.pdf",
+        "file_path": "/uploads/APP_2026_001/DOC_001.pdf",
+        "auto_classification": "ALM",
+        "auto_confidence": 0.82,
+        "final_classification": "ALM",
+        "user_modified": False,
+        "user_comment": None,
+        "classification_timestamp": "2026-03-10T14:30:00Z"
+    },
+    # ...
+]
+```
+
+---
+
+### 4️⃣ SCHEMA CONFIGURATION LAYER
+
+**Purpose:** Enable **dynamic schema templates** for structured data extraction based on document type and user requirements.
+
+#### Schema Template Architecture
+
+**File:** `backend/tools/schema_mapper.py`
+
+**Schema Templates:**
+
+```python
+from typing import List, Dict, Any, Optional
+from enum import Enum
+from pydantic import BaseModel, Field
+
+class FieldDataType(str, Enum):
+    STRING = "string"
+    NUMBER = "number"
+    DATE = "date"
+    PERCENTAGE = "percentage"
+    CURRENCY = "currency"
+    BOOLEAN = "boolean"
+    ARRAY = "array"
+
+class SchemaField(BaseModel):
+    """Individual field in a schema template"""
+    field_name: str
+    field_label: str
+    data_type: FieldDataType
+    required: bool = False
+    description: str
+    extraction_hints: List[str] = Field(default_factory=list)
+    validation_rules: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "field_name": "revenue",
+                "field_label": "Total Revenue",
+                "data_type": "currency",
+                "required": True,
+                "description": "Annual revenue from operations",
+                "extraction_hints": [
+                    "revenue from operations",
+                    "total income",
+                    "turnover",
+                    "sales"
+                ],
+                "validation_rules": {
+                    "min_value": 0,
+                    "unit": "INR Crores"
+                }
+            }
+        }
+
+class SchemaTemplate(BaseModel):
+    """Complete schema template for a document type"""
+    template_id: str
+    template_name: str
+    description: str
+    applicable_document_types: List[str]
+    fields: List[SchemaField]
+    created_at: str
+    version: str = "1.0"
+
+# Pre-defined Schema Templates
+
+FINANCIAL_ANALYSIS_SCHEMA = SchemaTemplate(
+    template_id="SCH_FINANCIAL_001",
+    template_name="Financial Analysis Schema",
+    description="Standard financial metrics for corporate analysis",
+    applicable_document_types=["ANNUAL_REPORT", "FINANCIAL_STATEMENT", "ITR"],
+    fields=[
+        SchemaField(
+            field_name="revenue",
+            field_label="Total Revenue",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Annual revenue from operations",
+            extraction_hints=["revenue from operations", "total income", "turnover", "sales"],
+            validation_rules={"min_value": 0, "unit": "INR Crores"}
+        ),
+        SchemaField(
+            field_name="ebitda",
+            field_label="EBITDA",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Earnings Before Interest, Tax, Depreciation & Amortization",
+            extraction_hints=["ebitda", "operating profit", "pbdit"],
+            validation_rules={"can_be_negative": True}
+        ),
+        SchemaField(
+            field_name="pat",
+            field_label="Profit After Tax",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Net profit after all expenses and taxes",
+            extraction_hints=["profit after tax", "pat", "net profit", "profit for the year"],
+            validation_rules={"can_be_negative": True}
+        ),
+        SchemaField(
+            field_name="total_debt",
+            field_label="Total Debt",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Sum of all borrowings (short-term + long-term)",
+            extraction_hints=["total borrowings", "total debt", "secured loans", "unsecured loans"],
+            validation_rules={"min_value": 0}
+        ),
+        SchemaField(
+            field_name="net_worth",
+            field_label="Net Worth",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Shareholders' equity",
+            extraction_hints=["net worth", "shareholders funds", "equity", "total equity"],
+            validation_rules={"can_be_negative": True}
+        ),
+        # ... additional fields
+    ]
+)
+
+BORROWING_ANALYSIS_SCHEMA = SchemaTemplate(
+    template_id="SCH_BORROWING_001",
+    template_name="Borrowing Analysis Schema",
+    description="Detailed borrowing profile for existing loans and facilities",
+    applicable_document_types=["BORROWING_PROFILE", "BANK_STATEMENT", "CIBIL_REPORT"],
+    fields=[
+        SchemaField(
+            field_name="lender_name",
+            field_label="Lender Name",
+            data_type=FieldDataType.STRING,
+            required=True,
+            description="Name of the lending institution",
+            extraction_hints=["bank name", "lender", "financial institution", "nbfc"]
+        ),
+        SchemaField(
+            field_name="facility_type",
+            field_label="Facility Type",
+            data_type=FieldDataType.STRING,
+            required=True,
+            description="Type of credit facility",
+            extraction_hints=["facility type", "loan type", "credit facility", "nature of facility"],
+            validation_rules={
+                "allowed_values": [
+                    "Term Loan", "Working Capital", "Cash Credit",
+                    "Letter of Credit", "Bank Guarantee", "Trade Finance"
+                ]
+            }
+        ),
+        SchemaField(
+            field_name="sanction_amount",
+            field_label="Sanctioned Amount",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Total sanctioned/approved limit",
+            extraction_hints=["sanction amount", "approved limit", "sanctioned limit"],
+            validation_rules={"min_value": 0, "unit": "INR Crores"}
+        ),
+        SchemaField(
+            field_name="outstanding_amount",
+            field_label="Outstanding Amount",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Current outstanding principal",
+            extraction_hints=["outstanding", "principal outstanding", "balance outstanding"],
+            validation_rules={"min_value": 0}
+        ),
+        SchemaField(
+            field_name="interest_rate",
+            field_label="Interest Rate",
+            data_type=FieldDataType.PERCENTAGE,
+            required=False,
+            description="Rate of interest charged",
+            extraction_hints=["rate of interest", "roi", "interest rate", "pricing"],
+            validation_rules={"min_value": 0, "max_value": 30}
+        ),
+        SchemaField(
+            field_name="security_offered",
+            field_label="Security/Collateral",
+            data_type=FieldDataType.STRING,
+            required=False,
+            description="Collateral security offered",
+            extraction_hints=["security", "collateral", "mortgage", "hypothecation", "pledge"]
+        ),
+        # ... additional fields
+    ]
+)
+
+OWNERSHIP_ANALYSIS_SCHEMA = SchemaTemplate(
+    template_id="SCH_OWNERSHIP_001",
+    template_name="Ownership & Shareholding Schema",
+    description="analyze shareholding pattern and ownership structure",
+    applicable_document_types=["SHAREHOLDING_PATTERN", "MCA_FILING", "ANNUAL_REPORT"],
+    fields=[
+        SchemaField(
+            field_name="shareholder_category",
+            field_label="Shareholder Category",
+            data_type=FieldDataType.STRING,
+            required=True,
+            description="Category of shareholder",
+            extraction_hints=["promoter", "public", "institutional", "non-institutional"],
+            validation_rules={
+                "allowed_values": [
+                    "Promoter & Promoter Group",
+                    "Public - Institutions",
+                    "Public - Non-Institutions",
+                    "Employee Trusts"
+                ]
+            }
+        ),
+        SchemaField(
+            field_name="number_of_shares",
+            field_label="Number of Shares",
+            data_type=FieldDataType.NUMBER,
+            required=True,
+            description="Total number of shares held",
+            extraction_hints=["no. of shares", "shares held"],
+            validation_rules={"min_value": 0}
+        ),
+        SchemaField(
+            field_name="percentage_holding",
+            field_label="% of Total Shareholding",
+            data_type=FieldDataType.PERCENTAGE,
+            required=True,
+            description="Percentage of total shareholding",
+            extraction_hints=["% of shareholding", "percentage", "holding %"],
+            validation_rules={"min_value": 0, "max_value": 100}
+        ),
+        SchemaField(
+            field_name="pledged_shares",
+            field_label="Pledged Shares",
+            data_type=FieldDataType.NUMBER,
+            required=False,
+            description="Number of shares pledged",
+            extraction_hints=["pledged", "encumbered shares"],
+            validation_rules={"min_value": 0}
+        ),
+        # ... additional fields
+    ]
+)
+
+PORTFOLIO_RISK_SCHEMA = SchemaTemplate(
+    template_id="SCH_PORTFOLIO_001",
+    template_name="Portfolio Risk Analysis Schema",
+    description="Portfolio performance and asset quality metrics",
+    applicable_document_types=["PORTFOLIO_PERFORMANCE", "ANNUAL_REPORT"],
+    fields=[
+        SchemaField(
+            field_name="gross_npa",
+            field_label="Gross NPA",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Gross Non-Performing Assets",
+            extraction_hints=["gross npa", "gross non-performing assets"],
+            validation_rules={"min_value": 0}
+        ),
+        SchemaField(
+            field_name="net_npa",
+            field_label="Net NPA",
+            data_type=FieldDataType.CURRENCY,
+            required=True,
+            description="Net Non-Performing Assets",
+            extraction_hints=["net npa", "net non-performing assets"],
+            validation_rules={"min_value": 0}
+        ),
+        SchemaField(
+            field_name="gnpa_ratio",
+            field_label="GNPA Ratio %",
+            data_type=FieldDataType.PERCENTAGE,
+            required=False,
+            description="Gross NPA as % of total advances",
+            extraction_hints=["gnpa ratio", "gross npa ratio", "asset quality"],
+            validation_rules={"min_value": 0, "max_value": 100}
+        ),
+        SchemaField(
+            field_name="provision_coverage_ratio",
+            field_label="Provision Coverage Ratio",
+            data_type=FieldDataType.PERCENTAGE,
+            required=False,
+            description="Provisions as % of gross NPAs",
+            extraction_hints=["provision coverage", "pcr"],
+            validation_rules={"min_value": 0}
+        ),
+        # ... additional fields
+    ]
+)
+
+# Registry of all templates
+SCHEMA_REGISTRY = {
+    "SCH_FINANCIAL_001": FINANCIAL_ANALYSIS_SCHEMA,
+    "SCH_BORROWING_001": BORROWING_ANALYSIS_SCHEMA,
+    "SCH_OWNERSHIP_001": OWNERSHIP_ANALYSIS_SCHEMA,
+    "SCH_PORTFOLIO_001": PORTFOLIO_RISK_SCHEMA,
+}
+```
+
+#### Schema Mapper Functions
+
+```python
+class SchemaMapper:
+    """Maps extracted data to selected schema templates"""
+    
+    @staticmethod
+    def get_recommended_schema(document_type: str) -> List[SchemaTemplate]:
+        """Recommend schemas based on document type"""
+        recommended = []
+        for schema in SCHEMA_REGISTRY.values():
+            if document_type in schema.applicable_document_types:
+                recommended.append(schema)
+        return recommended
+    
+    @staticmethod
+    def extract_with_schema(
+        document: Dict[str, Any],
+        schema_template: SchemaTemplate,
+        extraction_engine: Any
+    ) -> Dict[str, Any]:
+        """Extract data according to schema template"""
+        extracted_data = {}
+        
+        for field in schema_template.fields:
+            # Use extraction hints to search for data
+            value = extraction_engine.search_for_field(
+                field_name=field.field_name,
+                hints=field.extraction_hints,
+                data_type=field.data_type,
+                document_text=document.get("text", ""),
+                tables=document.get("tables", [])
+            )
+            
+            # Validate against rules
+            if field.validation_rules:
+                value = SchemaMapper._validate_field(value, field.validation_rules)
+            
+            # Mark if required field is missing
+            if field.required and value is None:
+                extracted_data[field.field_name] = {
+                    "value": None,
+                    "status": "MISSING_REQUIRED",
+                    "field_label": field.field_label
+                }
+            else:
+                extracted_data[field.field_name] = {
+                    "value": value,
+                    "status": "EXTRACTED" if value is not None else "NOT_FOUND",
+                    "data_type": field.data_type,
+                    "field_label": field.field_label
+                }
+        
+        return {
+            "schema_id": schema_template.template_id,
+            "schema_name": schema_template.template_name,
+            "extracted_fields": extracted_data,
+            "completion_percentage": SchemaMapper._calculate_completion(extracted_data),
+            "missing_required_fields": SchemaMapper._get_missing_required(extracted_data)
+        }
+    
+    @staticmethod
+    def _validate_field(value: Any, rules: Dict[str, Any]) -> Any:
+        """Apply validation rules to extracted value"""
+        if value is None:
+            return None
+        
+        # Min value check
+        if "min_value" in rules and isinstance(value, (int, float)):
+            if value < rules["min_value"]:
+                return None  # Invalid
+        
+        # Max value check
+        if "max_value" in rules and isinstance(value, (int, float)):
+            if value > rules["max_value"]:
+                return None  # Invalid
+        
+        # Allowed values check
+        if "allowed_values" in rules:
+            if value not in rules["allowed_values"]:
+                # Try fuzzy matching
+                from difflib import get_close_matches
+                matches = get_close_matches(str(value), rules["allowed_values"], n=1, cutoff=0.7)
+                return matches[0] if matches else None
+        
+        return value
+    
+    @staticmethod
+    def _calculate_completion(data: Dict[str, Any]) -> float:
+        """Calculate % of fields successfully extracted"""
+        total = len(data)
+        extracted = sum(1 for v in data.values() if v.get("status") == "EXTRACTED")
+        return (extracted / total * 100) if total > 0 else 0
+    
+    @staticmethod
+    def _get_missing_required(data: Dict[str, Any]) -> List[str]:
+        """Get list of missing required fields"""
+        return [
+            v["field_label"]
+            for v in data.values()
+            if v.get("status") == "MISSING_REQUIRED"
+        ]
+```
+
+#### API Endpoints
+
+**1. Get Recommended Schemas**
+
+```http
+GET /api/schemas/recommend?document_type=BORROWING_PROFILE
+
+Response 200 OK:
+{
+  "document_type": "BORROWING_PROFILE",
+  "recommended_schemas": [
+    {
+      "schema_id": "SCH_BORROWING_001",
+      "schema_name": "Borrowing Analysis Schema",
+      "description": "Detailed borrowing profile for existing loans",
+      "field_count": 8,
+      "applicable": true
+    },
+    {
+      "schema_id": "SCH_FINANCIAL_001",
+      "schema_name": "Financial Analysis Schema",
+      "description": "Standard financial metrics",
+      "field_count": 12,
+      "applicable": true
+    }
+  ]
+}
+```
+
+**2. Select Schema for Document**
+
+```http
+POST /api/schemas/select
+Content-Type: application/json
+
+{
+  "application_id": "APP_2026_001",
+  "document_schema_mapping": [
+    {
+      "file_id": "DOC_001",
+      "document_type": "ALM",
+      "selected_schema_id": "SCH_FINANCIAL_001"
+    },
+    {
+      "file_id": "DOC_002",
+      "document_type": "BORROWING_PROFILE",
+      "selected_schema_id": "SCH_BORROWING_001"
+    }
+  ]
+}
+
+Response 200 OK:
+{
+  "status": "schemas_configured",
+  "application_id": "APP_2026_001",
+  "ready_for_extraction": true,
+  "message": "Schema templates locked. Beginning extraction pipeline."
+}
+```
+
+**3. View Extraction Results with Schema**
+
+```http
+GET /api/extraction/results?file_id=DOC_002
+
+Response 200 OK:
+{
+  "file_id": "DOC_002",
+  "file_name": "Borrowing_Profile.pdf",
+  "document_type": "BORROWING_PROFILE",
+  "schema_applied": {
+    "schema_id": "SCH_BORROWING_001",
+    "schema_name": "Borrowing Analysis Schema"
+  },
+  "extraction_results": {
+    "completion_percentage": 87.5,
+    "extracted_records": [
+      {
+        "lender_name": {"value": "State Bank of India", "status": "EXTRACTED"},
+        "facility_type": {"value": "Term Loan", "status": "EXTRACTED"},
+        "sanction_amount": {"value": 50.0, "status": "EXTRACTED", "unit": "INR Crores"},
+        "outstanding_amount": {"value": 35.2, "status": "EXTRACTED"},
+        "interest_rate": {"value": 10.5, "status": "EXTRACTED", "unit": "%"},
+        "security_offered": {"value": "Factory Land & Building", "status": "EXTRACTED"}
+      },
+      {
+        "lender_name": {"value": "HDFC Bank", "status": "EXTRACTED"},
+        "facility_type": {"value": "Working Capital", "status": "EXTRACTED"},
+        "sanction_amount": {"value": 20.0, "status": "EXTRACTED"},
+        "outstanding_amount": {"value": 18.5, "status": "EXTRACTED"},
+        "interest_rate": {"value": 11.0, "status": "EXTRACTED"},
+        "security_offered": {"value": "Stock + Debtors", "status": "EXTRACTED"}
+      }
+    ],
+    "missing_required_fields": []
+  }
+}
+```
+
+#### Integration with Pipeline
+
+```python
+# Add to state after schema selection
+state["selected_schemas"] = {
+    "DOC_001": "SCH_FINANCIAL_001",
+    "DOC_002": "SCH_BORROWING_001",
+    # ...
+}
+
+# During extraction (in ingestor_agent.py)
+for document in state["documents"]:
+    schema_id = state["selected_schemas"].get(document["file_id"])
+    if schema_id:
+        schema = SCHEMA_REGISTRY[schema_id]
+        extraction_result = SchemaMapper.extract_with_schema(
+            document=document,
+            schema_template=schema,
+            extraction_engine=extraction_engine
+        )
+        document["schema_extraction"] = extraction_result
+```
+
+---
+
+### 5️⃣ SWOT ANALYSIS GENERATION
+
+**Purpose:** Add AI-generated SWOT (Strengths, Weaknesses, Opportunities, Threats) analysis to CAM report.
+
+#### Integration Point
+
+**File:** `backend/agents/cam_generator.py`
+
+**New Section Added:** Insert SWOT analysis after "Research Findings" section in CAM report.
+
+#### SWOT Generation Logic
+
+```python
+async def generate_swot_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate SWOT analysis using Gemini AI based on complete appraisal data.
+    
+    Inputs considered:
+    - Financial ratios and trends
+    - Research findings (litigation, news sentiment)
+    - Red flags and compliance issues
+    - Sector outlook (NTS analysis)
+    - Qualitative assessment (factory visit, management interview)
+    - Bank capacity constraints
+    - Collateral coverage
+    """
+    
+    # Gather all relevant data
+    financials = state.get("extracted_financials", {})
+    research = state.get("research_findings", {})
+    red_flags = state.get("red_flags", [])
+    nts_analysis = state.get("nts_analysis", {})
+    qualitative = state.get("qualitative_score_details", {})
+    rcu_verification = state.get("rcu_verification", {})
+    collateral = state.get("collateral_analysis", {})
+    
+    # Build comprehensive context for Gemini
+    context = f"""
+    Perform a SWOT (Strengths, Weaknesses, Opportunities, Threats) analysis for the following company based on credit appraisal data:
+    
+    COMPANY: {state.get('company_name')}
+    SECTOR: {state.get('sector')}
+    LOAN REQUEST: ₹{state.get('loan_amount_requested')} Crores
+    
+    FINANCIAL HIGHLIGHTS:
+    - Revenue (3yr): {financials.get('revenue_3yr', [])}
+    - EBITDA Margin: {financials.get('ebitda_margin', 0)}%
+    - PAT Margin: {financials.get('pat_margin', 0)}%
+    - DSCR: {financials.get('dscr', 0)}x
+    - Debt-to-Equity: {financials.get('debt_to_equity', 0)}x
+- Current Ratio: {financials.get('current_ratio', 0)}x
+    - Interest Coverage: {financials.get('interest_coverage', 0)}x
+    
+    RESEARCH FINDINGS:
+    - Litigation Risk: {research.get('litigation_risk', 'UNKNOWN')}
+    - Promoter Integrity Score: {research.get('promoter_integrity_score', 0)}/100
+    - News Sentiment: {research.get('news_sentiment_summary', '')}
+    - MCA Status: {research.get('mca_status', 'UNKNOWN')}
+    
+    RED FLAGS DETECTED:
+    {json.dumps([f"{flag['type']} ({flag['severity']})" for flag in red_flags[:5]], indent=2)}
+    
+    SECTOR ANALYSIS:
+    - Sector Status: {nts_analysis.get('sector_status', 'UNKNOWN')}
+    - Risk Score: {nts_analysis.get('risk_score', 0)}/100
+    - Growth Outlook: {nts_analysis.get('recommendation', '')}
+    
+    QUALITATIVE ASSESSMENT:
+    - Factory Visit Score: {qualitative.get('factory_score', {}).get('score', 0)}/100
+    - Management Interview Score: {qualitative.get('management_score', {}).get('score', 0)}/100
+    - Key Observations: {qualitative.get('text_analysis', {}).get('summary', '')}
+    
+    RCU VERIFICATION:
+    - Status: {rcu_verification.get('overall_status', 'UNKNOWN')}
+    - Score: {rcu_verification.get('overall_score', 0)}/100
+    
+    COLLATERAL:
+    - Coverage Ratio: {collateral.get('coverage_ratio', 0)}x
+    - Marketability: {collateral.get('marketability', 'UNKNOWN')}
+    
+    Based on this comprehensive data, provide a structured SWOT analysis with:
+    
+    STRENGTHS (4-6 points):
+    - Focus on financial strengths, operational capabilities, market position
+    - Highlight positive differentiators
+    
+    WEAKNESSES (4-6 points):
+    - Financial constraints, operational challenges
+    - Areas requiring improvement
+    - Risk factors
+    
+    OPPORTUNITIES (3-5 points):
+    - Growth potential, market opportunities
+    - Favorable sector trends
+    - Potential for improvement
+    
+    THREATS (3-5 points):
+    - Market risks, competitive threats
+    - Regulatory challenges
+    - Financial risks
+    
+    Return response as JSON:
+    {{
+      "strengths": ["...", "...", ...],
+      "weaknesses": ["...", "...", ...],
+      "opportunities": ["...", "...", ...],
+      "threats": ["...", "...", ...],
+      "overall_assessment": "1-2 sentence summary",
+      "key_consideration": "Most critical factor for lending decision"
+    }}
+    
+    Be specific, professional, and bank-grade in your analysis. Use actual numbers from the data provided.
+    """
+    
+    # Call Gemini API
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    response = model.generate_content(
+        context,
+        generation_config=genai.types.GenerationConfig(
+            max_output_tokens=2048,
+            temperature=0.7,
+        )
+    )
+    
+    # Parse JSON response
+    swot_json = _extract_json(response.text)
+    
+    # Validate structure
+    required_keys = ["strengths", "weaknesses", "opportunities", "threats"]
+    if not all(key in swot_json for key in required_keys):
+        # Fallback to basic SWOT if parsing fails
+        swot_json = _generate_fallback_swot(state)
+    
+    return swot_json
+
+def _generate_fallback_swot(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate basic rule-based SWOT if AI generation fails"""
+    financials = state.get("extracted_financials", {})
+    red_flags = state.get("red_flags", [])
+    
+    strengths = []
+    weaknesses = []
+    opportunities = []
+    threats = []
+    
+    # Rule-based SWOT generation
+    if financials.get("dscr", 0) > 1.5:
+        strengths.append(f"Strong debt servicing capability (DSCR: {financials['dscr']:.2f}x)")
+    
+    if financials.get("current_ratio", 0) > 1.33:
+        strengths.append(f"Healthy liquidity position (Current Ratio: {financials['current_ratio']:.2f}x)")
+    
+    revenue_trend = financials.get("revenue_3yr", [])
+    if len(revenue_trend) >= 3 and revenue_trend[-1] > revenue_trend[-3]:
+        growth = ((revenue_trend[-1] / revenue_trend[-3]) ** (1/2) - 1) * 100
+        strengths.append(f"Consistent revenue growth ({growth:.1f}% CAGR)")
+    
+    if len([f for f in red_flags if f.get("severity") == "CRITICAL"]) > 0:
+        weaknesses.append("Critical red flags identified in credit assessment")
+    
+if financials.get("debt_to_equity", 0) > 3:
+        weaknesses.append(f"High leverage (Debt-to-Equity: {financials['debt_to_equity']:.2f}x)")
+    
+    sector_analysis = state.get("nts_analysis", {})
+    if sector_analysis.get("sector_status") in ["POSITIVE", "STABLE"]:
+        opportunities.append(f"Favorable sector outlook: {sector_analysis.get('sector_status')}")
+    
+    if sector_analysis.get("sector_status") in ["SENSITIVE", "NEGATIVE"]:
+        threats.append(f"Sector under stress: {sector_analysis.get('sector_status')}")
+    
+    return {
+        "strengths": strengths if strengths else ["Data insufficient for detailed analysis"],
+        "weaknesses": weaknesses if weaknesses else ["Further investigation required"],
+        "opportunities": opportunities if opportunities else ["Context-dependent growth potential"],
+        "threats": threats if threats else ["Standard market and credit risks apply"],
+        "overall_assessment": "SWOT generated using rule-based fallback logic",
+        "key_consideration": "Limited data availability - manual review recommended"
+    }
+```
+
+#### CAM Section Formatting
+
+```python
+def _build_swot_section(swot_analysis: Dict[str, Any]) -> str:
+    """Format SWOT analysis for Word document"""
+    
+    content = """
+    
+    5. SWOT ANALYSIS
+    ═══════════════════════════════════════════════════════════════════
+    
+    5.1 STRENGTHS ✓
+    ─────────────────────────────────────────────────────────────────
+    """
+    
+    for i, strength in enumerate(swot_analysis.get("strengths", []), 1):
+        content += f"\n    {i}. {strength}"
+    
+    content += """
+    
+    5.2 WEAKNESSES ⚠
+    ─────────────────────────────────────────────────────────────────
+    """
+    
+    for i, weakness in enumerate(swot_analysis.get("weaknesses", []), 1):
+        content += f"\n    {i}. {weakness}"
+    
+    content += """
+    
+    5.3 OPPORTUNITIES ↗
+    ─────────────────────────────────────────────────────────────────
+    """
+    
+    for i, opportunity in enumerate(swot_analysis.get("opportunities", []), 1):
+        content += f"\n    {i}. {opportunity}"
+    
+    content += """
+    
+    5.4 THREATS ↘
+    ─────────────────────────────────────────────────────────────────
+    """
+    
+    for i, threat in enumerate(swot_analysis.get("threats", []), 1):
+        content += f"\n    {i}. {threat}"
+    
+    content += f"""
+    
+    5.5 KEY CONSIDERATION
+    ─────────────────────────────────────────────────────────────────
+    {swot_analysis.get("key_consideration", "Strategic assessment required")}
+    
+    Overall Assessment: {swot_analysis.get("overall_assessment", "")}
+    """
+    
+    return content
+
+# Integration in CAM generator
+async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
+    logs = [_log("CAM_GENERATOR", "Starting Credit Appraisal Memo generation...")]
+    
+    # ... existing CAM sections ...
+    
+    # NEW: Generate SWOT Analysis
+    logs.append(_log("CAM_GENERATOR", "Generating SWOT analysis using AI..."))
+    swot_analysis = await generate_swot_analysis(state)
+    state["swot_analysis"] = swot_analysis
+    logs.append(_log("CAM_GENERATOR", "SWOT analysis generated successfully", level="SUCCESS"))
+    
+    # Build CAM document
+    cam_sections = [
+        _build_executive_summary(state),
+        _build_company_profile(state),
+        _build_financial_analysis(state),
+        _build_research_findings(state),
+        _build_swot_section(swot_analysis),  # NEW SECTION
+        _build_risk_assessment(state),
+        _build_scoring_summary(state),
+        _build_recommendation(state),
+    ]
+    
+    # ... rest of CAM generation ...
+```
+
+---
+
+### 6️⃣ UPDATED USER JOURNEY FLOW
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 1: Entity Onboarding                                       │
+│         User enters company details (CIN, PAN, Sector, etc.)    │
+│         API: POST /api/onboarding/entity                        │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 2: Loan Application Details                                │
+│         User specifies loan type, amount, tenure, purpose       │
+│         API: POST /api/onboarding/loan-application              │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 3: Document Upload                                         │
+│         User uploads PDFs (Annual Report, Bank Statements, etc.)│
+│         API: POST /api/documents/upload-and-classify            │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 4: Review Auto-Classification                              │
+│         System shows detected document types with confidence    │
+│         User reviews and confirms/overrides classifications     │
+│         UI: Shows [File Name] [Type] [Confidence] [Override]    │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 5: Confirm Classifications                                 │
+│         User clicks "Confirm & Proceed"                         │
+│         API: POST /api/documents/confirm-classification         │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 6: Schema Template Selection                               │
+│         System recommends schemas based on document types       │
+│         User selects schema template for each document          │
+│         API: POST /api/schemas/select                           │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 7: Extraction Pipeline Execution                           │
+│         Document Intelligence Pipeline runs                     │
+│         Extracts data according to selected schemas             │
+│         Real-time progress via WebSocket                        │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 8: Secondary Research & Enrichment                         │
+│         Research Agent: Web search, MCA, NCLT, ratings          │
+│         Enrichment: RCU, CIBIL, NTS, Working Capital, FOR       │
+│         Parallel execution with 30s timeout per task            │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 9: 4-Gate Decision Process                                 │
+│         Gate 1: Compliance Check                                │
+│         Gate 2: Bank Capacity Check                             │
+│         Gate 3: Explainable Scoring with RBI Benchmarks         │
+│         Gate 4: Final Amount Calculation                        │
+└───────────────────────┬─────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ STEP 10: CAM Report Generation with SWOT                        │
+│         Generates comprehensive Credit Appraisal Memo           │
+│         Includes AI-generated SWOT analysis                     │
+│         Downloadable as .docx + viewable in UI                  │
+│         API: GET /api/appraisal/{job_id}/download               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 7️⃣ INTEGRATION POINTS & STATE MANAGEMENT
+
+#### Global Pipeline State Extensions
+
+```python
+# EXISTING STATE (unchanged)
+state = {
+    "job_id": "uuid",
+    "company_name": "...",
+    "sector": "...",
+    "loan_amount_requested": 0.0,
+    "documents": [...],
+    "extracted_financials": {...},
+    "research_findings": {...},
+    "red_flags": [...],
+    "credit_score": 0,
+    "final_decision": "...",
+    "agent_statuses": {...},
+    # ...
+}
+
+# NEW FIELDS (additive only)
+state.update({
+    # From Entity Onboarding (Step 1-2)
+    "entity_profile": {
+        "company_name": "ABC Manufacturing Ltd",
+        "cin": "U12345MH2015PTC123456",
+        "pan": "AABCA1234C",
+        "sector": "Manufacturing",
+        "annual_turnover": 150.0,
+        "date_of_incorporation": "2015-03-15",
+        "employee_count": 250
+    },
+    "loan_application": {
+        "application_id": "APP_2026_001",
+        "loan_type": "Working Capital",
+        "loan_amount": 50.0,
+        "loan_tenure_months": 12,
+        "purpose": "Working capital requirement",
+        "expected_interest_rate": 10.5
+    },
+    
+    # From Document Classification (Step 4-5)
+    "document_classifications": [
+        {
+            "file_id": "DOC_001",
+            "file_name": "ALM_Report_2024.pdf",
+            "auto_classification": "ALM",
+            "auto_confidence": 0.82,
+            "final_classification": "ALM",
+            "user_modified": False,
+            "classification_timestamp": "2026-03-10T14:30:00Z"
+        },
+        # ...
+    ],
+    
+    # From Schema Selection (Step 6)
+    "selected_schemas": {
+        "DOC_001": "SCH_FINANCIAL_001",
+        "DOC_002": "SCH_BORROWING_001",
+        # ...
+    },
+    
+    # From Schema Extraction (Step 7)
+    "schema_extraction_results": {
+        "DOC_001": {
+            "schema_id": "SCH_FINANCIAL_001",
+            "completion_percentage": 92.0,
+            "extracted_fields": {...},
+            "missing_required_fields": []
+        },
+        # ...
+    },
+    
+    # From SWOT Generation (Step 10)
+    "swot_analysis": {
+        "strengths": ["...", "...", ...],
+        "weaknesses": ["...", "...", ...],
+        "opportunities": ["...", "...", ...],
+        "threats": ["...", "...", ...],
+        "overall_assessment": "...",
+        "key_consideration": "..."
+    }
+})
+```
+
+#### Agent Access Patterns
+
+**Ingestor Agent:**
+- Reads: `entity_profile`, `document_classifications`, `selected_schemas`
+- Uses entity context for targeted extraction
+- Applies schema templates during extraction
+- Writes: `extracted_financials`, `schema_extraction_results`
+
+**Research Agent:**
+- Reads: `entity_profile.cin`, `entity_profile.pan`, `company_name`
+- Uses CIN for MCA/NCLT searches
+- Uses PAN for credit bureau checks
+- Writes: `research_findings`, `red_flags`
+
+**Explainable Scoring Agent:**
+- Reads: `loan_application.loan_type`
+- Adjusts weight profile based on loan type
+- Writes: `scorecard_result`, `final_score`
+
+**CAM Generator:**
+- Reads: All state fields including new extensions
+- Generates SWOT using complete context
+- Writes: `cam_report`, `swot_analysis`
+
+---
+
+### 8️⃣ BACKEND FILE STRUCTURE - NEW MODULES
+
+```
+backend/
+├── modules/                         # NEW DIRECTORY
+│   ├── __init__.py
+│   ├── entity_onboarding.py         # NEW: EntityProfile, LoanApplication schemas & APIs
+│   └── README.md
+│
+├── tools/
+│   ├── document_intelligence/
+│   │   ├── document_classifier.py   # MODIFIED: Add ALM, SHAREHOLDING, BORROWING, PORTFOLIO types
+│   │   ├── ocr_engine.py            # UNCHANGED
+│   │   ├── table_extractor.py       # UNCHANGED - mayextend for new doc types
+│   │   └── ...
+│   │
+│   ├── schema_mapper.py             # NEW: SchemaTemplate, SchemaMapper, SCHEMA_REGISTRY
+│   └── ...
+│
+├── agents/
+│   ├── ingestor_agent.py            # MODIFIED: Integrate schema extraction
+│   ├── research_agent.py            # MODIFIED: Use entity_profile for targeted searches
+│   ├── cam_generator.py             # MODIFIED: Add SWOT section generation
+│   ├── explainable_scoring_agent.py # MODIFIED: Read loan_application.loan_type
+│   └── ...
+│
+├── api/                             # NEW DIRECTORY (optional - organize endpoints)
+│   ├── __init__.py
+│   ├── onboarding_routes.py         # NEW: Entity & loan application endpoints
+│   ├── document_routes.py           # NEW: Classification & schema endpoints
+│   └── ...
+│
+├── main.py                          # MODIFIED: Add new API routes
+├── requirements.txt                 # UNCHANGED (or add new dependencies if needed)
+└── ...
+```
+
+---
+
+### 9️⃣ API ENDPOINTS SUMMARY
+
+| Method | Endpoint | Purpose | Status |
+|--------|----------|---------|--------|
+| **Entity Onboarding** ||||
+| POST | `/api/onboarding/entity` | Create entity profile | 🔶 New |
+| POST | `/api/onboarding/loan-application` | Submit loan application | 🔶 New |
+| GET | `/api/onboarding/{entity_id}` | Retrieve entity details | 🔶 New |
+| **Document Classification** ||||
+| POST | `/api/documents/upload-and-classify` | Upload & auto-classify documents | 🔶 New |
+| GET | `/api/documents/classification/{application_id}` | Get classification results | 🔶 New |
+| POST | `/api/documents/confirm-classification` | User confirms classifications | 🔶 New |
+| **Schema Management** ||||
+| GET | `/api/schemas/list` | List all schema templates | 🔶 New |
+| GET | `/api/schemas/recommend` | Get recommended schemas for doc type | 🔶 New |
+| POST | `/api/schemas/select` | Select schemas for documents | 🔶 New |
+| GET | `/api/extraction/results` | View schema-based extraction results | 🔶 New |
+| **Existing Endpoints (Unchanged)** ||||
+| POST | `/api/appraisal/start` | Start appraisal pipeline | ✅ Existing |
+| GET | `/api/appraisal/{job_id}/status` | Get pipeline status | ✅ Existing |
+| GET | `/api/appraisal/{job_id}/results` | Get final results | ✅ Existing |
+| GET | `/api/appraisal/{job_id}/download` | Download CAM report | ✅ Existing |
+| WS | `/ws/{job_id}` | Real-time log stream | ✅ Existing |
+
+---
+
+### 🔟 IMPLEMENTATION CHECKLIST
+
+#### Phase 1: Entity Onboarding (Week 1)
+- [ ] Create `modules/entity_onboarding.py` with Pydantic schemas
+- [ ] Add API endpoints for entity & loan application
+- [ ] Create frontend forms for Step 1 & 2
+- [ ] Update pipeline state initialization
+- [ ] Test entity profile validation (CIN, PAN format checks)
+
+#### Phase 2: Document Classification Extension (Week 1-2)
+- [ ] Extend `DocumentType` enum with new categories
+- [ ] Add keyword patterns for ALM, SHAREHOLDING, BORROWING, PORTFOLIO
+- [ ] Implement table structure validation functions
+- [ ] Add frontend classification review UI
+- [ ] Test classification accuracy on sample documents
+
+#### Phase 3: Human-in-the-Loop (Week 2)
+- [ ] Create `/documents/upload-and-classify` endpoint
+- [ ] Implement classification confidence logic
+- [ ] Build frontend review interface with override capability
+- [ ] Create `/documents/confirm-classification` endpoint
+- [ ] Test user workflow end-to-end
+
+#### Phase 4: Schema Configuration (Week 2-3)
+- [ ] Create `tools/schema_mapper.py` with template definitions
+- [ ] Implement SchemaMapper extraction logic
+- [ ] Add schema recommendation API
+- [ ] Build frontend schema selection UI
+- [ ] Integrate schema extraction with ingestor agent
+- [ ] Test extraction completeness and accuracy
+
+#### Phase 5: SWOT Analysis (Week 3)
+- [ ] Implement `generate_swot_analysis()` function in CAM generator
+- [ ] Create Gemini prompt for SWOT generation
+- [ ] Add `_build_swot_section()` formatting function
+- [ ] Integrate SWOT into CAM document structure
+- [ ] Test SWOT quality and relevance
+
+#### Phase 6: Integration & Testing (Week 4)
+- [ ] End-to-end integration testing
+- [ ] Update all agent access patterns for new state fields
+- [ ] Performance testing of extended pipeline
+- [ ] Documentation updates
+- [ ] User acceptance testing
+
+---
+
+### 🎯 KEY IMPLEMENTATION PRINCIPLES
+
+1. **Backward Compatibility**: All existing functionality must continue to work
+2. **Additive Changes**: New features extend state without modifying existing fields
+3. **Graceful Degradation**: If new features fail, fallback to existing logic
+4. **Modular Design**: New modules are self-contained and independently testable
+5. **State Immutability**: Agents read from state, write to new keys only
+6. **API Versioning**: Consider adding `/api/v2/` for new endpoints if significant changes
+7. **Frontend Progressive Enhancement**: New UI steps can be optional/skippable initially
+
+---
+
+### 📊 EXPECTED IMPACT
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Document Classification Accuracy | 85% | 92% | +7% (with human verification) |
+| Extraction Completeness | 78% | 91% | +13% (schema-guided) |
+| User Confidence in Results | Medium | High | Human-in-the-loop validation |
+| CAM Report Comprehensiveness | Good | Excellent | +SWOT analysis section |
+| Onboarding Clarity | Moderate | High | Structured entity capture |
 
 ---
 

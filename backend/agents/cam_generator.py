@@ -506,6 +506,323 @@ def _build_appendix(doc: Document, state: Dict[str, Any]):
             doc.add_paragraph(f"[{s.get('label')}] {s.get('query')}", style="List Bullet")
 
 
+# ─── SWOT Analysis ────────────────────────────────────────────────────────────
+
+async def generate_swot_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Generate SWOT analysis using Gemini with comprehensive state data.
+    Falls back to rule-based SWOT if Gemini fails.
+    """
+    try:
+        # Extract all relevant data
+        company_name = state.get("company_name", "Company")
+        sector = state.get("sector", "Unknown")
+        loan_amount = state.get("loan_amount_requested", 0) / 10_000_000  # Convert to Cr
+        
+        extracted = state.get("extracted_financials", {})
+        financials = extracted.get("financials", {})
+        research = state.get("research_findings", {})
+        scores = state.get("five_cs_scores", {})
+        red_flags = extracted.get("red_flags", [])
+        
+        # Financial metrics
+        revenue_3yr = financials.get("revenue_3yr_cagr", 0)
+        ebitda_margin = financials.get("ebitda_margin", 0)
+        pat_margin = financials.get("pat_margin", 0)
+        dscr = financials.get("dscr", 0)
+        debt_to_equity = financials.get("debt_to_equity", 0)
+        current_ratio = financials.get("current_ratio", 0)
+        interest_coverage = financials.get("interest_coverage", 0)
+        
+        # Research insights
+        litigation_risk = research.get("litigation_risk", "N/A")
+        promoter_score = research.get("promoter_integrity_score", 0)
+        news_sentiment = research.get("news_sentiment", "Neutral")
+        mca_status = research.get("mca_status", "N/A")
+        
+        # Sector analysis
+        sector_analysis = research.get("sector_analysis", {})
+        sector_status = sector_analysis.get("sector_status", "N/A")
+        risk_score = sector_analysis.get("risk_score", 0)
+        recommendation = sector_analysis.get("recommendation", "N/A")
+        
+        # Qualitative scores
+        qualitative_inputs = state.get("qualitative_inputs", {})
+        factory_score = qualitative_inputs.get("factory_visit", {}).get("overall_score", 0)
+        management_score = qualitative_inputs.get("management_interview", {}).get("overall_score", 0)
+        
+        # Collateral
+        collateral = scores.get("collateral", {})
+        coverage_ratio = collateral.get("coverage_ratio", 0)
+        marketability = collateral.get("marketability", "N/A")
+        
+        # Top 5 red flags
+        top_5_flags = [f[:100] for f in red_flags[:5]]
+        flags_str = "; ".join(top_5_flags) if top_5_flags else "None"
+        
+        # Build comprehensive Gemini prompt
+        prompt = f"""Perform a SWOT analysis for {company_name} ({sector}) applying for ₹{loan_amount:.2f} Cr loan.
+
+FINANCIALS: Revenue 3yr CAGR={revenue_3yr:.1f}%, EBITDA%={ebitda_margin:.1f}%, PAT%={pat_margin:.1f}%, 
+DSCR={dscr:.2f}x, D/E={debt_to_equity:.2f}x, Current Ratio={current_ratio:.2f}x, ICR={interest_coverage:.2f}x.
+
+RESEARCH: Litigation Risk={litigation_risk}, Promoter Score={promoter_score}/100,
+News Sentiment={news_sentiment}, MCA Status={mca_status}.
+
+RED FLAGS ({len(red_flags)} total): {flags_str}
+
+SECTOR: Status={sector_status}, Risk Score={risk_score}/100, Outlook={recommendation}.
+
+QUALITATIVE: Factory Score={factory_score}/100, Mgmt Score={management_score}/100.
+
+COLLATERAL: Coverage={coverage_ratio:.2f}x, Marketability={marketability}.
+
+Generate a bank-grade SWOT analysis with:
+- 4-6 STRENGTHS: Positive financial ratios, competitive advantages, strong metrics
+- 4-6 WEAKNESSES: Red flags, poor ratios, operational concerns
+- 3-5 OPPORTUNITIES: Growth potential, sector trends, expansion possibilities
+- 3-5 THREATS: Market risks, regulatory changes, competitive pressures
+
+Use actual numbers from the data provided. Be specific and professional.
+
+Return ONLY valid JSON in this exact format:
+{{
+  "strengths": ["strength 1", "strength 2", ...],
+  "weaknesses": ["weakness 1", "weakness 2", ...],
+  "opportunities": ["opportunity 1", "opportunity 2", ...],
+  "threats": ["threat 1", "threat 2", ...],
+  "overall_assessment": "2-3 sentence summary of SWOT implications",
+  "key_consideration": "Single most critical factor for credit decision"
+}}"""
+        
+        # Call Gemini
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=2048,
+                temperature=0.7,
+            )
+        )
+        
+        # Parse JSON response
+        response_text = response.text.strip()
+        # Extract JSON from response (may be wrapped in markdown)
+        if "```json" in response_text:
+            json_start = response_text.find("```json") + 7
+            json_end = response_text.find("```", json_start)
+            response_text = response_text[json_start:json_end].strip()
+        elif "```" in response_text:
+            json_start = response_text.find("```") + 3
+            json_end = response_text.find("```", json_start)
+            response_text = response_text[json_start:json_end].strip()
+        
+        swot = json.loads(response_text)
+        
+        # Validate structure
+        required_keys = ["strengths", "weaknesses", "opportunities", "threats", "overall_assessment", "key_consideration"]
+        if not all(key in swot for key in required_keys):
+            raise ValueError("Invalid SWOT structure from Gemini")
+        
+        return swot
+        
+    except Exception as e:
+        # Fallback to rule-based SWOT
+        print(f"Gemini SWOT generation failed: {e}. Using rule-based fallback.")
+        return _generate_fallback_swot(state)
+
+
+def _generate_fallback_swot(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Rule-based SWOT generation fallback when Gemini fails.
+    Based on quantitative thresholds from state data.
+    """
+    extracted = state.get("extracted_financials", {})
+    financials = extracted.get("financials", {})
+    research = state.get("research_findings", {})
+    scores = state.get("five_cs_scores", {})
+    red_flags = extracted.get("red_flags", [])
+    
+    strengths = []
+    weaknesses = []
+    opportunities = []
+    threats = []
+    
+    # ── STRENGTHS (6 rules) ───────────────────────────────────────────────────
+    
+    # 1. Strong DSCR
+    dscr = financials.get("dscr", 0)
+    if dscr >= 2.0:
+        strengths.append(f"Excellent debt servicing capability with DSCR of {dscr:.2f}x (well above 1.5x minimum)")
+    elif dscr >= 1.5:
+        strengths.append(f"Adequate debt servicing with DSCR of {dscr:.2f}x")
+    
+    # 2. Healthy profitability
+    ebitda_margin = financials.get("ebitda_margin", 0)
+    if ebitda_margin >= 15:
+        strengths.append(f"Strong profitability with EBITDA margin of {ebitda_margin:.1f}%")
+    
+    # 3. Low leverage
+    debt_to_equity = financials.get("debt_to_equity", 0)
+    if debt_to_equity <= 1.5:
+        strengths.append(f"Conservative leverage at D/E of {debt_to_equity:.2f}x")
+    
+    # 4. Good liquidity
+    current_ratio = financials.get("current_ratio", 0)
+    if current_ratio >= 1.5:
+        strengths.append(f"Strong liquidity position with current ratio of {current_ratio:.2f}x")
+    
+    # 5. Promoter integrity
+    promoter_score = research.get("promoter_integrity_score", 0)
+    if promoter_score >= 75:
+        strengths.append(f"High promoter integrity score of {promoter_score}/100 indicating trustworthy management")
+    
+    # 6. Revenue growth
+    revenue_cagr = financials.get("revenue_3yr_cagr", 0)
+    if revenue_cagr >= 15:
+        strengths.append(f"Robust revenue growth at {revenue_cagr:.1f}% 3-year CAGR")
+    
+    # Default strength if none qualify
+    if not strengths:
+        strengths.append("Company has operational history and established business presence")
+    
+    # ── WEAKNESSES (4 rules) ──────────────────────────────────────────────────
+    
+    # 1. High red flag count
+    if len(red_flags) >= 5:
+        weaknesses.append(f"{len(red_flags)} red flags identified including regulatory and financial concerns")
+    
+    # 2. Poor DSCR
+    if dscr < 1.25 and dscr > 0:
+        weaknesses.append(f"Weak debt servicing ability with DSCR of {dscr:.2f}x (below 1.25x threshold)")
+    
+    # 3. High leverage
+    if debt_to_equity > 3.0:
+        weaknesses.append(f"High leverage risk with D/E ratio of {debt_to_equity:.2f}x")
+    
+    # 4. Litigation risk
+    litigation_risk = research.get("litigation_risk", "LOW")
+    if litigation_risk in ["HIGH", "CRITICAL"]:
+        weaknesses.append(f"Significant litigation exposure rated as {litigation_risk}")
+    
+    # Default weakness
+    if not weaknesses:
+        weaknesses.append("Limited operational track record requires continued monitoring")
+    
+    # ── OPPORTUNITIES (2 rules) ───────────────────────────────────────────────
+    
+    # 1. Sector outlook
+    sector_analysis = research.get("sector_analysis", {})
+    sector_status = sector_analysis.get("sector_status", "")
+    if "GROWING" in sector_status.upper() or "STABLE" in sector_status.upper():
+        opportunities.append(f"Favorable sector dynamics with {sector_status.lower()} market conditions")
+    
+    # 2. Expansion capacity
+    capacity_score = scores.get("capacity", {}).get("score", 0)
+    if capacity_score >= 70:
+        opportunities.append("Strong operational capacity allows for business expansion and scaling")
+    
+    # Default opportunities
+    if not opportunities:
+        opportunities.append("Market expansion potential in existing product/service lines")
+        opportunities.append("Operational efficiency improvements can enhance margins")
+    
+    # ── THREATS (2 rules) ─────────────────────────────────────────────────────
+    
+    # 1. Sector headwinds
+    headwinds = research.get("sector_headwinds", [])
+    if headwinds:
+        threats.append(f"Sector faces headwinds including: {', '.join(headwinds[:2])}")
+    
+    # 2. Working capital stress
+    working_capital_days = financials.get("working_capital_days", 0)
+    if working_capital_days > 120:
+        threats.append(f"Working capital cycle of {working_capital_days:.0f} days indicates cash flow pressure")
+    
+    # Default threats
+    if not threats:
+        threats.append("Competitive market dynamics and pricing pressures")
+        threats.append("Regulatory changes in the sector may impact operations")
+    
+    # ── ASSESSMENT ────────────────────────────────────────────────────────────
+    
+    weighted_score = scores.get("weighted_total", 0)
+    recommendation = state.get("final_recommendation", {}).get("recommendation", "PENDING")
+    
+    if weighted_score >= 70:
+        overall_assessment = f"Overall strong credit profile with weighted score of {weighted_score:.1f}/100. Strengths significantly outweigh weaknesses, supporting {recommendation} recommendation."
+    elif weighted_score >= 50:
+        overall_assessment = f"Moderate credit profile with weighted score of {weighted_score:.1f}/100. Balance of strengths and weaknesses requires careful evaluation. Recommendation: {recommendation}."
+    else:
+        overall_assessment = f"Weak credit profile with weighted score of {weighted_score:.1f}/100. Weaknesses and threats dominate analysis. Recommendation: {recommendation}."
+    
+    # Key consideration
+    if len(red_flags) >= 5:
+        key_consideration = f"Address {len(red_flags)} identified red flags before credit approval"
+    elif dscr < 1.25 and dscr > 0:
+        key_consideration = "Debt servicing capability below minimum threshold requires enhancement"
+    elif promoter_score < 50:
+        key_consideration = "Low promoter integrity score requires detailed background verification"
+    else:
+        key_consideration = "Monitor financial performance and ensure adherence to loan covenants"
+    
+    return {
+        "strengths": strengths[:6],  # Max 6
+        "weaknesses": weaknesses[:6],  # Max 6
+        "opportunities": opportunities[:5],  # Max 5
+        "threats": threats[:5],  # Max 5
+        "overall_assessment": overall_assessment,
+        "key_consideration": key_consideration
+    }
+
+
+def _build_swot_section(doc: Document, swot: Dict[str, Any]):
+    """Format SWOT analysis section for Word document."""
+    _add_section_heading(doc, "5. SWOT ANALYSIS")
+    
+    # Overall Assessment
+    doc.add_paragraph(swot.get("overall_assessment", ""), style="Body Text")
+    doc.add_paragraph()
+    
+    # Strengths
+    _add_section_heading(doc, "5.1 STRENGTHS ✓", level=2)
+    for i, strength in enumerate(swot.get("strengths", []), 1):
+        p = doc.add_paragraph(style="List Number")
+        p.add_run(strength)
+    doc.add_paragraph()
+    
+    # Weaknesses
+    _add_section_heading(doc, "5.2 WEAKNESSES ⚠", level=2)
+    for i, weakness in enumerate(swot.get("weaknesses", []), 1):
+        p = doc.add_paragraph(style="List Number")
+        p.add_run(weakness)
+    doc.add_paragraph()
+    
+    # Opportunities
+    _add_section_heading(doc, "5.3 OPPORTUNITIES ↗", level=2)
+    for i, opportunity in enumerate(swot.get("opportunities", []), 1):
+        p = doc.add_paragraph(style="List Number")
+        p.add_run(opportunity)
+    doc.add_paragraph()
+    
+    # Threats
+    _add_section_heading(doc, "5.4 THREATS ↘", level=2)
+    for i, threat in enumerate(swot.get("threats", []), 1):
+        p = doc.add_paragraph(style="List Number")
+        p.add_run(threat)
+    doc.add_paragraph()
+    
+    # Key Consideration
+    _add_section_heading(doc, "5.5 KEY CONSIDERATION", level=2)
+    p = doc.add_paragraph()
+    run = p.add_run(swot.get("key_consideration", ""))
+    run.bold = True
+    run.font.color.rgb = RGBColor(0xFF, 0x69, 0x00)  # Orange-red for emphasis
+    doc.add_paragraph()
+
+
 # ─── Main Agent Function ──────────────────────────────────────────────────────
 
 async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -527,6 +844,12 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
     exec_summary = _call_gemini_for_summary(state)
     logs.append(_log(agent, "Executive Summary generated."))
 
+    # ── Generate SWOT Analysis ────────────────────────────────────────────────
+    logs.append(_log(agent, "Generating SWOT Analysis..."))
+    swot_analysis = await generate_swot_analysis(state)
+    logs.append(_log(agent, f"SWOT Analysis complete: {len(swot_analysis.get('strengths', []))} strengths, "
+                             f"{len(swot_analysis.get('weaknesses', []))} weaknesses identified"))
+
     # ── Build Word document ───────────────────────────────────────────────────
     doc = Document()
 
@@ -546,6 +869,7 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
     _build_company_background(doc, extracted)
     _build_financial_analysis(doc, extracted, state.get("loan_amount_requested", 0))
     _build_data_quality_section(doc, state)  # NEW: Data Quality & Extraction Confidence
+    _build_swot_section(doc, swot_analysis)  # NEW: SWOT Analysis
     _build_five_cs(doc, scores)
     _build_score_breakdown_table(doc, scores)
     _build_risk_flags(doc, extracted)
@@ -570,6 +894,7 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "cam_path": cam_path,
+        "swot_analysis": swot_analysis,  # Include SWOT for Results page
         "completed_at": datetime.now().isoformat(),
         "status": "COMPLETED",
         "logs": logs,

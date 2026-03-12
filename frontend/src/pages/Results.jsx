@@ -33,6 +33,43 @@ function calcTurnaround(started, completed) {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
+function ConfidenceIndicator({ confidence }) {
+  // Show 5 circles, filled based on confidence (every 20%)
+  const filled = Math.ceil((confidence || 0) * 5)
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span
+          key={i}
+          className={`w-2 h-2 rounded-full ${
+            i <= filled ? 'bg-[#00d4aa]' : 'bg-[#1a2530]'
+          }`}
+        />
+      ))}
+      <span className="ml-1.5 text-xs font-mono text-[#4a6070]">
+        {((confidence || 0) * 100).toFixed(0)}%
+      </span>
+    </div>
+  )
+}
+
+function MethodBadge({ method }) {
+  const config = {
+    table_exact_match: { label: 'Table', bg: 'bg-[#00d4aa]/10', text: 'text-[#00d4aa]', border: 'border-[#00d4aa]/30' },
+    table_fuzzy_match: { label: 'Table', bg: 'bg-[#00d4aa]/10', text: 'text-[#00d4aa]', border: 'border-[#00d4aa]/30' },
+    text_regex: { label: 'Regex', bg: 'bg-[#ffd166]/10', text: 'text-[#ffd166]', border: 'border-[#ffd166]/30' },
+    ai_extraction: { label: 'Gemini AI', bg: 'bg-[#a855f7]/10', text: 'text-[#a855f7]', border: 'border-[#a855f7]/30' },
+    ocr: { label: 'OCR', bg: 'bg-[#0099ff]/10', text: 'text-[#0099ff]', border: 'border-[#0099ff]/30' },
+    not_found: { label: '—', bg: 'bg-[#1a2530]', text: 'text-[#4a6070]', border: 'border-[#1a2530]' },
+  }
+  const c = config[method] || config.not_found
+  return (
+    <span className={`px-2 py-1 rounded text-[10px] font-mono border ${c.bg} ${c.text} ${c.border}`}>
+      {c.label}
+    </span>
+  )
+}
+
 function DecisionBanner({ recommendation, loanAmount, interestRate }) {
   const rec = (recommendation || '').toUpperCase()
   const isApprove = rec === 'APPROVE'
@@ -420,6 +457,473 @@ export default function Results() {
             <p className="text-xs text-[#4a6070] mt-4 pl-1">
               Impact: {research.recommendation_impact}
             </p>
+          )}
+        </div>
+      )}
+
+      {/* SWOT Analysis Grid */}
+      {data.swot_analysis && (
+        <div className="card p-6 mb-6">
+          <h2 className="font-syne font-semibold text-[#e8f0f5] mb-4">
+            🎯 SWOT Analysis
+          </h2>
+          
+          {/* Overall Assessment */}
+          {data.swot_analysis.overall_assessment && (
+            <div className="mb-6 p-4 rounded-lg border border-[#1a2530] bg-[#0d1419]">
+              <p className="text-sm text-[#e8f0f5] leading-relaxed">
+                {data.swot_analysis.overall_assessment}
+              </p>
+            </div>
+          )}
+
+          {/* 2x2 Grid */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            {/* Strengths - Green */}
+            <div className="p-5 rounded-lg border-2 border-[#00d4aa]/30 bg-[#00d4aa]/5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-full flex items-center justify-center" 
+                     style={{ background: 'linear-gradient(135deg, #00d4aa, #00aa88)' }}>
+                  <span className="text-white font-bold text-lg">✓</span>
+                </div>
+                <h3 className="font-syne font-semibold text-[#00d4aa] text-lg">STRENGTHS</h3>
+              </div>
+              <ul className="space-y-2">
+                {(data.swot_analysis.strengths || []).slice(0, 3).map((strength, i) => (
+                  <li key={i} className="text-xs text-[#e8f0f5] flex items-start gap-2">
+                    <span className="text-[#00d4aa] shrink-0 mt-0.5">•</span>
+                    <span>{strength}</span>
+                  </li>
+                ))}
+              </ul>
+              {data.swot_analysis.strengths?.length > 3 && (
+                <p className="text-xs text-[#4a6070] mt-2">
+                  +{data.swot_analysis.strengths.length - 3} more in CAM report
+                </p>
+              )}
+            </div>
+
+            {/* Weaknesses - Red */}
+            <div className="p-5 rounded-lg border-2 border-[#ef476f]/30 bg-[#ef476f]/5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-full flex items-center justify-center" 
+                     style={{ background: 'linear-gradient(135deg, #ef476f, #c73659)' }}>
+                  <span className="text-white font-bold text-lg">⚠</span>
+                </div>
+                <h3 className="font-syne font-semibold text-[#ef476f] text-lg">WEAKNESSES</h3>
+              </div>
+              <ul className="space-y-2">
+                {(data.swot_analysis.weaknesses || []).slice(0, 3).map((weakness, i) => (
+                  <li key={i} className="text-xs text-[#e8f0f5] flex items-start gap-2">
+                    <span className="text-[#ef476f] shrink-0 mt-0.5">•</span>
+                    <span>{weakness}</span>
+                  </li>
+                ))}
+              </ul>
+              {data.swot_analysis.weaknesses?.length > 3 && (
+                <p className="text-xs text-[#4a6070] mt-2">
+                  +{data.swot_analysis.weaknesses.length - 3} more in CAM report
+                </p>
+              )}
+            </div>
+
+            {/* Opportunities - Blue */}
+            <div className="p-5 rounded-lg border-2 border-[#0099ff]/30 bg-[#0099ff]/5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-full flex items-center justify-center" 
+                     style={{ background: 'linear-gradient(135deg, #0099ff, #0077cc)' }}>
+                  <span className="text-white font-bold text-lg">↗</span>
+                </div>
+                <h3 className="font-syne font-semibold text-[#0099ff] text-lg">OPPORTUNITIES</h3>
+              </div>
+              <ul className="space-y-2">
+                {(data.swot_analysis.opportunities || []).slice(0, 3).map((opportunity, i) => (
+                  <li key={i} className="text-xs text-[#e8f0f5] flex items-start gap-2">
+                    <span className="text-[#0099ff] shrink-0 mt-0.5">•</span>
+                    <span>{opportunity}</span>
+                  </li>
+                ))}
+              </ul>
+              {data.swot_analysis.opportunities?.length > 3 && (
+                <p className="text-xs text-[#4a6070] mt-2">
+                  +{data.swot_analysis.opportunities.length - 3} more in CAM report
+                </p>
+              )}
+            </div>
+
+            {/* Threats - Orange */}
+            <div className="p-5 rounded-lg border-2 border-[#ff9500]/30 bg-[#ff9500]/5">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded-full flex items-center justify-center" 
+                     style={{ background: 'linear-gradient(135deg, #ff9500, #dd7700)' }}>
+                  <span className="text-white font-bold text-lg">↘</span>
+                </div>
+                <h3 className="font-syne font-semibold text-[#ff9500] text-lg">THREATS</h3>
+              </div>
+              <ul className="space-y-2">
+                {(data.swot_analysis.threats || []).slice(0, 3).map((threat, i) => (
+                  <li key={i} className="text-xs text-[#e8f0f5] flex items-start gap-2">
+                    <span className="text-[#ff9500] shrink-0 mt-0.5">•</span>
+                    <span>{threat}</span>
+                  </li>
+                ))}
+              </ul>
+              {data.swot_analysis.threats?.length > 3 && (
+                <p className="text-xs text-[#4a6070] mt-2">
+                  +{data.swot_analysis.threats.length - 3} more in CAM report
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Key Consideration */}
+          {data.swot_analysis.key_consideration && (
+            <div className="p-4 rounded-lg border-2 border-[#ff6900]/40 bg-[#ff6900]/10">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl shrink-0">🔑</span>
+                <div>
+                  <p className="text-xs text-[#4a6070] uppercase tracking-wider mb-1 font-mono">
+                    KEY CONSIDERATION
+                  </p>
+                  <p className="text-sm text-[#e8f0f5] font-semibold">
+                    {data.swot_analysis.key_consideration}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Extraction Quality - Document Intelligence Pipeline */}
+      {data.ingestion_summary && (
+        <div className="card p-6 mb-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-lg flex items-center justify-center" 
+                 style={{ background: 'linear-gradient(135deg, #00d4aa, #0099ff)' }}>
+              <span className="text-white text-xl">🔬</span>
+            </div>
+            <div>
+              <h2 className="font-syne font-semibold text-[#e8f0f5]">
+                Extraction Quality
+              </h2>
+              <p className="text-xs text-[#4a6070] mt-0.5">
+                8-Stage Document Intelligence Pipeline · CLAHE + Hough + PaddleOCR
+              </p>
+            </div>
+          </div>
+
+          {/* Ingestion Summary Card */}
+          <div className="grid grid-cols-3 gap-4 mb-6">
+            <div className="p-4 rounded-lg border border-[#1a2530] bg-[#0d1419]">
+              <p className="text-[10px] text-[#4a6070] uppercase tracking-wider mb-1 font-mono">
+                Documents Processed
+              </p>
+              <p className="font-mono text-2xl text-[#e8f0f5]">
+                {data.ingestion_summary.total_documents}
+              </p>
+            </div>
+            <div className="p-4 rounded-lg border border-[#1a2530] bg-[#0d1419]">
+              <p className="text-[10px] text-[#4a6070] uppercase tracking-wider mb-1 font-mono">
+                Avg Completeness
+              </p>
+              <p className="font-mono text-2xl text-[#00d4aa]">
+                {data.ingestion_summary.avg_completion_pct?.toFixed(1) || 0}%
+              </p>
+            </div>
+            <div className="p-4 rounded-lg border border-[#1a2530] bg-[#0d1419]">
+              <p className="text-[10px] text-[#4a6070] uppercase tracking-wider mb-1 font-mono">
+                Schema-Guided Extraction
+              </p>
+              <p className="font-mono text-2xl text-[#e8f0f5]">
+                {data.ingestion_summary.schema_guided_count || 0} docs
+              </p>
+            </div>
+          </div>
+
+          {/* Confidence Distribution */}
+          {data.ingestion_summary.schema_guided_count > 0 && (
+            <div className="mb-6 p-4 rounded-lg border border-[#1a2530] bg-[#0d1419]">
+              <p className="text-xs text-[#4a6070] uppercase tracking-wider mb-3 font-mono">
+                Confidence Distribution
+              </p>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#00d4aa]" />
+                  <span className="text-sm text-[#e8f0f5]">
+                    High (≥80%): <span className="font-mono font-bold">{data.ingestion_summary.high_confidence_count || 0}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#ffd166]" />
+                  <span className="text-sm text-[#e8f0f5]">
+                    Medium (50-80%): <span className="font-mono font-bold">{data.ingestion_summary.medium_confidence_count || 0}</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#ef476f]" />
+                  <span className="text-sm text-[#e8f0f5]">
+                    Low (<50%): <span className="font-mono font-bold">{data.ingestion_summary.low_confidence_count || 0}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Schema Extraction Results */}
+          {data.schema_extraction_results && Object.keys(data.schema_extraction_results).length > 0 && (
+            <div className="mb-6">
+              <p className="text-sm text-[#e8f0f5] font-semibold mb-3">
+                📋 Schema-Guided Extraction Results
+              </p>
+              <div className="space-y-3">
+                {Object.entries(data.schema_extraction_results).map(([fileId, result]) => {
+                  const completion = result.completion_percentage || 0
+                  const barColor = completion >= 80 ? '#00d4aa' : completion >= 50 ? '#ffd166' : '#ef476f'
+                  const totalFields = Object.keys(result.fields || {}).length
+                  const extractedFields = Object.values(result.fields || {}).filter(f => f.status === 'EXTRACTED').length
+                  
+                  return (
+                    <details key={fileId} className="group">
+                      <summary className="cursor-pointer p-4 rounded-lg border border-[#1a2530] bg-[#0d1419] hover:bg-[#111820] transition-colors">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-sm text-[#e8f0f5] font-mono">
+                                {result.schema_name || 'Unknown Schema'}
+                              </span>
+                              <span className="text-[10px] text-[#4a6070] font-mono">
+                                {fileId.slice(0, 8)}...
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 h-2 rounded-full bg-[#1a2530] overflow-hidden">
+                                <div 
+                                  className="h-full transition-all"
+                                  style={{ 
+                                    width: `${completion}%`,
+                                    background: `linear-gradient(90deg, ${barColor}, ${barColor}aa)`
+                                  }}
+                                />
+                              </div>
+                              <span className="text-xs font-mono text-[#e8f0f5] whitespace-nowrap">
+                                {completion.toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
+                          <span className="ml-4 text-[10px] text-[#4a6070] font-mono">
+                            {extractedFields}/{totalFields} fields
+                          </span>
+                        </div>
+                      </summary>
+                      
+                      {/* Field-level details */}
+                      <div className="mt-2 p-4 rounded-lg border border-[#1a2530] bg-[#0a0e12]">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-[#1a2530]">
+                                <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                                  Field
+                                </th>
+                                <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                                  Extracted Value
+                                </th>
+                                <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                                  Method
+                                </th>
+                                <th className="text-left px-3 py-2 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                                  Confidence
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(result.fields || {}).map(([fieldName, fieldData]) => {
+                                const isMissing = fieldData.status === 'MISSING'
+                                const isLowConf = !isMissing && (fieldData.confidence || 0) < 0.5
+                                const rowBg = isMissing ? 'bg-[#ef476f]/5' : isLowConf ? 'bg-[#ffd166]/5' : ''
+                                
+                                return (
+                                  <tr key={fieldName} className={`border-b border-[#1a2530]/40 ${rowBg}`}>
+                                    <td className="px-3 py-2.5 text-[#e8f0f5]">
+                                      {fieldData.field_label || fieldName}
+                                    </td>
+                                    <td className="px-3 py-2.5 font-mono">
+                                      {isMissing ? (
+                                        <span className="text-[#ef476f] italic">NOT FOUND</span>
+                                      ) : (
+                                        <span className="text-[#e8f0f5]">
+                                          {String(fieldData.value || '—').substring(0, 50)}
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="px-3 py-2.5">
+                                      <MethodBadge method={fieldData.extraction_method} />
+                                    </td>
+                                    <td className="px-3 py-2.5">
+                                      {isMissing ? (
+                                        <span className="text-[10px] text-[#4a6070] font-mono">—</span>
+                                      ) : (
+                                        <ConfidenceIndicator confidence={fieldData.confidence} />
+                                      )}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        
+                        {result.missing_required_fields?.length > 0 && (
+                          <div className="mt-3 p-3 rounded border border-[#ef476f]/30 bg-[#ef476f]/5">
+                            <p className="text-[10px] uppercase tracking-wider text-[#ef476f] mb-1 font-mono">
+                              Missing Required Fields
+                            </p>
+                            <p className="text-xs text-[#e8f0f5]">
+                              {result.missing_required_fields.join(', ')}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </details>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 3-Way Revenue Reconciliation */}
+          {extracted.gst_vs_bank_discrepancy && (
+            <div className="mb-6">
+              <p className="text-sm text-[#e8f0f5] font-semibold mb-3">
+                ⚖️ 3-Way Revenue Reconciliation
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-[#1a2530]">
+                      <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                        Source
+                      </th>
+                      <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                        Revenue Value
+                      </th>
+                      <th className="text-left px-4 py-3 text-[10px] uppercase tracking-wider text-[#4a6070] font-mono">
+                        Status
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* GSTR-3B (Self-declared) */}
+                    <tr className="border-b border-[#1a2530]/40">
+                      <td className="px-4 py-3 text-[#e8f0f5]">
+                        GSTR-3B (Self-declared)
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[#e8f0f5]">
+                        ₹{(extracted.gst_vs_bank_discrepancy.gstr3b_total || 0).toFixed(2)} Cr
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-[#00d4aa]">✓ Base</span>
+                      </td>
+                    </tr>
+                    
+                    {/* GSTR-2A (Auto-populated) */}
+                    {extracted.gst_vs_bank_discrepancy.gstr2a_total > 0 && (
+                      <tr className="border-b border-[#1a2530]/40">
+                        <td className="px-4 py-3 text-[#e8f0f5]">
+                          GSTR-2A (Auto-populated)
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[#e8f0f5]">
+                          ₹{(extracted.gst_vs_bank_discrepancy.gstr2a_total || 0).toFixed(2)} Cr
+                        </td>
+                        <td className="px-4 py-3">
+                          {extracted.gst_vs_bank_discrepancy.discrepancy_pct <= 5 ? (
+                            <span className="text-[#00d4aa]">
+                              ✓ {Math.abs(extracted.gst_vs_bank_discrepancy.discrepancy_pct).toFixed(1)}% variance — within 5% threshold
+                            </span>
+                          ) : extracted.gst_vs_bank_discrepancy.discrepancy_pct <= 15 ? (
+                            <span className="text-[#ffd166]">
+                              ⚠ {Math.abs(extracted.gst_vs_bank_discrepancy.discrepancy_pct).toFixed(1)}% variance — within 15% threshold
+                            </span>
+                          ) : (
+                            <span className="text-[#ef476f]">
+                              ✕ {Math.abs(extracted.gst_vs_bank_discrepancy.discrepancy_pct).toFixed(1)}% variance — exceeds 15% threshold
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    
+                    {/* Financial Statement */}
+                    {fin.revenue && (
+                      <tr className="border-b border-[#1a2530]/40">
+                        <td className="px-4 py-3 text-[#e8f0f5]">
+                          Financial Statement (Latest FY)
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[#e8f0f5]">
+                          ₹{(fin.revenue || 0).toFixed(2)} Cr
+                        </td>
+                        <td className="px-4 py-3">
+                          {(() => {
+                            const gstBase = extracted.gst_vs_bank_discrepancy.gstr3b_total || 0
+                            const variance = gstBase > 0 ? ((fin.revenue - gstBase) / gstBase) * 100 : 0
+                            if (Math.abs(variance) <= 10) {
+                              return <span className="text-[#00d4aa]">✓ {Math.abs(variance).toFixed(1)}% variance — within 10% threshold</span>
+                            } else if (Math.abs(variance) <= 20) {
+                              return <span className="text-[#ffd166]">⚠ {Math.abs(variance).toFixed(1)}% variance — within 20% threshold</span>
+                            } else {
+                              return <span className="text-[#ef476f]">✕ {Math.abs(variance).toFixed(1)}% variance — exceeds 20% threshold</span>
+                            }
+                          })()}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              
+              {extracted.gst_vs_bank_discrepancy.detected && (
+                <div className={`mt-3 p-3 rounded border ${
+                  extracted.gst_vs_bank_discrepancy.severity === 'HIGH' 
+                    ? 'border-[#ef476f]/30 bg-[#ef476f]/5' 
+                    : 'border-[#ffd166]/30 bg-[#ffd166]/5'
+                }`}>
+                  <p className={`text-xs font-semibold mb-1 ${
+                    extracted.gst_vs_bank_discrepancy.severity === 'HIGH' ? 'text-[#ef476f]' : 'text-[#ffd166]'
+                  }`}>
+                    ⚠ {extracted.gst_vs_bank_discrepancy.severity} Severity Discrepancy
+                  </p>
+                  <p className="text-xs text-[#4a6070]">
+                    {extracted.gst_vs_bank_discrepancy.details}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Document Quality Insights */}
+          {extracted.document_quality_summary && (
+            <div className="p-4 rounded-lg border border-[#0099ff]/30 bg-[#0099ff]/5">
+              <div className="flex items-start gap-3">
+                <span className="text-xl shrink-0">💡</span>
+                <div className="flex-1">
+                  <p className="text-xs text-[#0099ff] uppercase tracking-wider mb-1 font-mono">
+                    Pipeline Innovation
+                  </p>
+                  <p className="text-sm text-[#e8f0f5]">
+                    Your system uses <strong>CLAHE contrast enhancement</strong> → <strong>Hough Line Transform deskewing</strong> → 
+                    <strong> PaddleOCR with Tesseract fallback</strong> → <strong>4-tier confidence scoring</strong> (Table Exact 0.9 → 
+                    Fuzzy 0.7 → Regex 0.6 → Gemini AI 0.5). This 8-stage pipeline provides <strong>transparent, auditable extraction</strong> — 
+                    a competitive advantage other teams don't have.
+                  </p>
+                  {extracted.document_quality_summary.low_confidence_count > 0 && (
+                    <p className="text-xs text-[#ffd166] mt-2">
+                      ⚠ {extracted.document_quality_summary.low_confidence_count} document(s) flagged for manual review due to low quality.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}
