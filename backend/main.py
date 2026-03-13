@@ -1131,10 +1131,13 @@ async def download_cam(job_id: str):
         logging.info(f"Searching in directory: {expected_dir}")
         
         if expected_dir.exists():
+            # Prefer PDF, fall back to DOCX
+            pdf_files = list(expected_dir.glob("CAM_*.pdf"))
             docx_files = list(expected_dir.glob("CAM_*.docx"))
-            logging.info(f"Found {len(docx_files)} CAM files in directory")
-            if docx_files:
-                cam_path = str(docx_files[0])
+            cam_files = pdf_files or docx_files
+            logging.info(f"Found {len(pdf_files)} PDF, {len(docx_files)} DOCX files in directory")
+            if cam_files:
+                cam_path = str(cam_files[0])
                 logging.info(f"Using found file: {cam_path}")
             else:
                 raise HTTPException(status_code=404, detail=f"CAM document file not found at {cam_path}. No CAM files in directory.")
@@ -1142,10 +1145,15 @@ async def download_cam(job_id: str):
             raise HTTPException(status_code=404, detail=f"CAM document not found at {cam_path}. Directory does not exist.")
 
     filename = Path(cam_path).name
-    logging.info(f"Serving CAM file: {filename}")
+    ext = Path(cam_path).suffix.lower()
+    media_type = (
+        "application/pdf" if ext == ".pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    logging.info(f"Serving CAM file: {filename} ({media_type})")
     return FileResponse(
         path=cam_path,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        media_type=media_type,
         filename=filename,
     )
 

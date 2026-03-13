@@ -122,7 +122,7 @@ class ComplianceAgent:
             "structuring_amount_max": 999999,  # ₹9.99L
             "pmla_cash_threshold": 1000000,    # ₹10L
         }
-        self.thresholds.update(config.get("thresholds", {}))
+        self.thresholds.update(self.config.get("thresholds", {}))
     
     async def process(self, company_data: dict) -> ComplianceResult:
         """

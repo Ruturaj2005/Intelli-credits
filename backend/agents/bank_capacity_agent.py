@@ -289,7 +289,8 @@ class BankCapacityAgent:
         Source: RBI Prompt Corrective Action Framework 2017
         If bank under PCA: HARD BLOCK - cannot lend
         """
-        if self.bank_config.pca_status:
+        is_under_pca = getattr(self.bank_config, "under_pca", getattr(self.bank_config, "pca_status", False))
+        if is_under_pca:
             return ExposureCheck(
                 check_name="PCA Status Check",
                 check_type="Regulatory Compliance",

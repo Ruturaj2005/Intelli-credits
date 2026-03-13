@@ -65,7 +65,10 @@ export default function Pipeline() {
   // WebSocket connection
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${protocol}://${window.location.host}/ws/${jobId}`
+    const wsHost = import.meta.env.DEV
+      ? (import.meta.env.VITE_WS_HOST || 'localhost:8000')
+      : window.location.host
+    const wsUrl = `${protocol}://${wsHost}/ws/${jobId}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
@@ -91,7 +94,13 @@ export default function Pipeline() {
     }
 
     return () => {
-      ws.close()
+      // In React StrictMode, effect cleanup may run while socket is CONNECTING.
+      // Closing a CONNECTING socket triggers noisy browser warnings.
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close()
+      } else if (ws.readyState === WebSocket.CONNECTING) {
+        ws.addEventListener('open', () => ws.close(), { once: true })
+      }
     }
   }, [jobId, navigate])
 

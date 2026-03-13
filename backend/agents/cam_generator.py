@@ -62,7 +62,7 @@ def _call_gemini_for_summary(state: Dict[str, Any]) -> str:
     )
     try:
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         response = model.generate_content(
             prompt,
@@ -562,6 +562,7 @@ async def generate_swot_analysis(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # Build comprehensive Gemini prompt
         prompt = f"""Perform a SWOT analysis for {company_name} ({sector}) applying for ₹{loan_amount:.2f} Cr loan.
+Write ONLY in English. All output must be in English.
 
 FINANCIALS: Revenue 3yr CAGR={revenue_3yr:.1f}%, EBITDA%={ebitda_margin:.1f}%, PAT%={pat_margin:.1f}%, 
 DSCR={dscr:.2f}x, D/E={debt_to_equity:.2f}x, Current Ratio={current_ratio:.2f}x, ICR={interest_coverage:.2f}x.
@@ -597,7 +598,7 @@ Return ONLY valid JSON in this exact format:
         
         # Call Gemini
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         
         response = model.generate_content(
             prompt,
@@ -888,8 +889,18 @@ async def run_cam_generator(state: Dict[str, Any]) -> Dict[str, Any]:
     cam_path = str(output_dir / cam_filename)
 
     doc.save(cam_path)
+    logs.append(_log(agent, f"CAM DOCX saved: {cam_filename}"))
 
-    logs.append(_log(agent, f"CAM document saved: {cam_filename}", level="SUCCESS"))
+    # ── Convert to PDF ────────────────────────────────────────────────────────
+    pdf_path = cam_path.replace(".docx", ".pdf")
+    try:
+        from docx2pdf import convert
+        convert(cam_path, pdf_path)
+        cam_path = pdf_path
+        logs.append(_log(agent, f"CAM converted to PDF: {Path(pdf_path).name}", level="SUCCESS"))
+    except Exception as pdf_err:
+        logs.append(_log(agent, f"PDF conversion failed ({pdf_err}); serving DOCX instead.", level="WARNING"))
+
     logs.append(_log(agent, "CAM Generator Agent DONE.", level="SUCCESS"))
 
     return {

@@ -216,7 +216,7 @@ export default function Results() {
       const url = URL.createObjectURL(res.data)
       const a = document.createElement('a')
       a.href = url
-      a.download = res.headers['content-disposition']?.split('filename=')[1] || `CAM_${jobId}.docx`
+      a.download = res.headers['content-disposition']?.split('filename=')[1] || `CAM_${jobId}.pdf`
       a.click()
       URL.revokeObjectURL(url)
     } catch {
@@ -265,7 +265,7 @@ export default function Results() {
   
   // ── Step 2: Read Five Cs scores with multiple fallback locations ──
   const scorecard = data.scorecard_result || {}
-  const fiveC = data.five_c_scores || scorecard.five_c_scores || {}
+  const fiveC = data.five_cs_scores || scorecard.five_cs_scores || scorecard.five_c_scores || {}
   
   // ── Step 3: Read decision rationale ──
   const decisionRationale = data.decision_rationale || scorecard.decision_rationale || "No reasoning provided"
@@ -291,6 +291,11 @@ export default function Results() {
   const supplementary = fiveC.supplementary || {}
   const shap = data.shap_attribution || {}
 
+  const getCScore = (c) => {
+    const raw = fiveC[c]
+    return Number(typeof raw === 'object' ? raw?.score : raw) || 0
+  }
+
   const C_ORDER = ['character', 'capacity', 'capital', 'collateral', 'conditions']
   const C_WEIGHTS = { character: 25, capacity: 30, capital: 20, collateral: 15, conditions: 10 }
 
@@ -300,7 +305,7 @@ export default function Results() {
       {explainer && (
         <ExplainerPopup
           c={explainer}
-          data={scores[explainer]}
+          data={fiveC[explainer]}
           show={true}
           onClose={() => setExplainer(null)}
         />
@@ -389,7 +394,7 @@ export default function Results() {
                 onClick={() => setExplainer(c)}
                 className="text-[11px] px-3 py-1.5 rounded-full border border-[#1a2530] text-[#4a6070] hover:border-[#00d4aa] hover:text-[#00d4aa] transition-colors cursor-pointer"
               >
-                {c.charAt(0).toUpperCase() + c.slice(1)}: <span className="font-mono">{fiveC[c] || 0}</span>
+                {c.charAt(0).toUpperCase() + c.slice(1)}: <span className="font-mono">{getCScore(c)}</span>
               </button>
             ))}
           </div>
@@ -999,7 +1004,7 @@ export default function Results() {
             </thead>
             <tbody>
               {C_ORDER.map((c) => {
-                const score = Number(fiveC[c] || 0)
+                const score = getCScore(c)
                 const weight = C_WEIGHTS[c] / 100
                 const weightedScore = score * weight
                 const attr = Number(shap[c]?.replace(/[+]/g, '') || 0)
@@ -1027,7 +1032,7 @@ export default function Results() {
                 <td className="px-4 py-3" />
                 <td className="px-4 py-3 font-mono text-[#4a6070]">100%</td>
                 <td className="px-4 py-3 font-mono font-bold text-[#00d4aa] text-base">
-                  {fmt(C_ORDER.reduce((sum, c) => sum + (Number(fiveC[c] || 0) * (C_WEIGHTS[c] / 100)), 0), 1)}
+                  {fmt(C_ORDER.reduce((sum, c) => sum + (getCScore(c) * (C_WEIGHTS[c] / 100)), 0), 1)}
                 </td>
                 <td className="px-4 py-3" />
                 <td />
@@ -1042,7 +1047,7 @@ export default function Results() {
         <div>
           <h3 className="font-syne font-semibold text-[#e8f0f5]">Credit Appraisal Memo</h3>
           <p className="text-xs text-[#4a6070] mt-1">
-            Full Word document with all sections, tables, and recommendations.
+            Full PDF report with all sections, tables, and recommendations.
           </p>
         </div>
         <button

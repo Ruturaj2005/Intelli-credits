@@ -49,7 +49,7 @@ def _call_gemini(prompt: str, max_tokens: int = 2048) -> str:
         raise ValueError("GEMINI_API_KEY environment variable not set")
     
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     
     response = model.generate_content(
         prompt,
@@ -762,37 +762,37 @@ async def _decision_engine_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logs.append(_log(agent, f"Binding constraint: {binding_constraint}"))
     logs.append(_log(agent, f"Final decision: {final_decision} for ₹{final_approved_amount:,.0f}", level="SUCCESS"))
     
-    # Create EnhancedFinalDecision
+    # Create EnhancedFinalDecision using current schema fields
     enhanced_decision = EnhancedFinalDecision(
-        gate_1_compliance=DecisionGate(
-            gate_name="Gate 1: Compliance",
-            passed=gate1_pass,
-            reason=gate1_reason
-        ),
-        gate_2_capacity=DecisionGate(
-            gate_name="Gate 2: Bank Capacity",
-            passed=gate2_pass,
-            reason=gate2_reason
-        ),
-        gate_3_score=DecisionGate(
-            gate_name="Gate 3: Credit Score",
-            passed=True,  # Always passes if we reach here
-            reason=gate3_reason,
-            score_value=final_score,
-            decision_band=decision_band
-        ),
-        gate_4_amount=AmountCalculation(
+        recommendation=final_decision,
+        deciding_gate=DecisionGate.GATE_4_AMOUNT,
+        amount_calculation=AmountCalculation(
             requested_amount=loan_amount_requested,
             score_based_max=score_based_max,
+            score_based_reason=gate3_reason,
             capacity_based_max=capacity_max,
-            approved_amount=final_approved_amount,
-            binding_constraint=binding_constraint,
-            calculation_rationale=gate4_reason
+            capacity_based_reason=gate2_reason,
+            final_approved_amount=final_approved_amount,
+            amount_reduced=final_approved_amount < loan_amount_requested,
+            reduction_reason=binding_constraint if final_approved_amount < loan_amount_requested else None,
         ),
-        final_decision=final_decision,
-        approved_amount=final_approved_amount,
-        interest_rate_pct=capacity_result.get("final_interest_rate_pct", 0.0) if final_approved_amount > 0 else 0.0,
-        decision_summary=f"{final_decision}: ₹{final_approved_amount:,.0f} approved at {capacity_result.get('final_interest_rate_pct', 0.0):.2f}% p.a."
+        rejection_reason=gate1_reason if final_decision == "REJECT" else None,
+        rejection_gate="GATE_1_COMPLIANCE" if not gate1_pass else ("GATE_2_CAPACITY" if not gate2_pass else None),
+        final_interest_rate_pct=capacity_result.get("final_interest_rate_pct", 0.0) if final_approved_amount > 0 else 0.0,
+        explainability={
+            "gate_1_compliance": {"passed": gate1_pass, "reason": gate1_reason},
+            "gate_2_capacity": {"passed": gate2_pass, "reason": gate2_reason},
+            "gate_3_score": {"score": final_score, "decision_band": decision_band, "reason": gate3_reason},
+            "gate_4_amount": {"reason": gate4_reason, "binding_constraint": binding_constraint},
+            "scorecard_summary": {
+                "final_score": final_score,
+                "decision_band": decision_band,
+                "approved_amount": final_approved_amount,
+            },
+            "top_strengths": [],
+            "top_concerns": [],
+            "committee_notes": f"{final_decision}: ₹{final_approved_amount:,.0f} approved at {capacity_result.get('final_interest_rate_pct', 0.0):.2f}% p.a.",
+        },
     )
     
     return {

@@ -317,6 +317,7 @@ reconciliation_reasoning: 2-3 sentence plain English explanation for the credit 
 # ─── Agent 4: CAM Content ─────────────────────────────────────────────────────
 
 CAM_EXECUTIVE_SUMMARY_PROMPT = """You are drafting the Executive Summary section of a Credit Appraisal Memo for an Indian bank.
+Write ONLY in English. All output must be in English regardless of document language.
 
 Company: {company_name}
 Sector: {sector}
