@@ -288,7 +288,7 @@ def analyze_qualitative_text(
 
     try:
         genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
 You are a senior Indian bank credit officer analyzing qualitative observations 

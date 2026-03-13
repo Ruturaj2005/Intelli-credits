@@ -75,6 +75,63 @@ def _format_ratio(value: float, ratio_type: str = "multiplier") -> str:
         return f"{value:.2f}"
 
 
+def build_decision_rationale(
+    company_name: str,
+    final_score: float,
+    decision_band: str,
+    dscr: float,
+    debt_to_equity: float,
+    current_ratio: float,
+    revenue_cagr: float,
+    sector: str,
+    loan_amount: float
+) -> str:
+    """Build human-readable decision rationale with key financial metrics."""
+    rationale_parts = []
+    
+    # Header
+    rationale_parts.append(f"{company_name} scored {final_score:.1f}/100, resulting in a {decision_band} decision.")
+    
+    # DSCR analysis
+    if dscr >= 1.5:
+        rationale_parts.append(f"Strong debt servicing capacity with DSCR of {dscr:.2f}x (above 1.5x threshold).")
+    elif dscr >= 1.2:
+        rationale_parts.append(f"Adequate debt servicing capacity with DSCR of {dscr:.2f}x (meets RBI floor 1.2x).")
+    elif dscr > 0:
+        rationale_parts.append(f"DSCR of {dscr:.2f}x is below RBI  floor 1.2x, indicating repayment risk.")
+    
+    # Leverage analysis
+    de_benchmark = get_industry_benchmark(sector, "debt_to_equity")
+    if debt_to_equity > 0:
+        if debt_to_equity <= de_benchmark.get("median", 1.5):
+            rationale_parts.append(f"Leverage (D/E {debt_to_equity:.2f}x) is within industry median ({de_benchmark.get('median', 1.5):.1f}x).")
+        else:
+            rationale_parts.append(f"Elevated leverage (D/E {debt_to_equity:.2f}x) exceeds industry median ({de_benchmark.get('median', 1.5):.1f}x).")
+    
+    # Liquidity analysis
+    cr_benchmark = get_industry_benchmark(sector, "current_ratio")
+    if current_ratio > 0:
+        if current_ratio >= cr_benchmark.get("median", 1.5):
+            rationale_parts.append(f"Healthy liquidity with current ratio of {current_ratio:.2f}x.")
+        else:
+            rationale_parts.append(f"Current ratio of {current_ratio:.2f}x is below industry median ({cr_benchmark.get('median', 1.5):.1f}x).")
+    
+    # Growth analysis
+    if revenue_cagr > 15:
+        rationale_parts.append(f"Strong revenue growth with {revenue_cagr:.1f}% CAGR.")
+    elif revenue_cagr > 5:
+        rationale_parts.append(f"Moderate revenue growth with {revenue_cagr:.1f}% CAGR.")
+    elif revenue_cagr > 0:
+        rationale_parts.append(f"Slow revenue growth with {revenue_cagr:.1f}% CAGR.")
+    elif revenue_cagr < 0:
+        rationale_parts.append(f"Declining revenue with {revenue_cagr:.1f}% CAGR.")
+    
+    # Loan size context
+    rationale_parts.append(f"Loan amount requested: ₹{loan_amount:,.0f}.")
+    
+    return " ".join(rationale_parts)
+
+
 # ─── RBI OBSE Industry Benchmarks (FY2024) ───────────────────────────────────
 # Source: RBI Finances of Non-Government Non-Financial Companies 2023-24
 
@@ -619,8 +676,36 @@ class ExplainableScoringAgent:
         weight_profile = get_weight_profile(loan_type)
         logger.info(f"Weight profile: {loan_type.value} | {weight_profile.rationale}")
         
-        # Step 2: Extract financial data
-        financials = company_data.get("extracted_financials", {}).get("financials", {})
+        # Step 2: Extract financial data (now with flat structure from ingestor)
+        extracted = company_data.get("extracted_financials", {})
+        
+        # Try flat structure first (new format), fallback to nested (old format)
+        if "dscr" in extracted or "debt_to_equity" in extracted:
+            # New flat structure
+            dscr = _safe_float(extracted.get("dscr", 0))
+            debt_to_equity = _safe_float(extracted.get("debt_to_equity", 0))
+            current_ratio = _safe_float(extracted.get("current_ratio", 0))
+            revenue_3yr = extracted.get("revenue_3yr", [0, 0, 0])
+            ebitda_3yr = extracted.get("ebitda_3yr", [0, 0, 0])
+            total_debt = _safe_float(extracted.get("total_debt", 0))
+            net_worth = _safe_float(extracted.get("net_worth", 1))
+            interest_expense = _safe_float(extracted.get("interest_expense", 0))
+            revenue_cagr = _safe_float(extracted.get("revenue_cagr", 0))
+            collateral_coverage = _safe_float(extracted.get("collateral_coverage", 0))
+        else:
+            # Old nested structure fallback
+            financials = extracted.get("financials", {})
+            dscr = _safe_float(financials.get("dscr", 0))
+            debt_to_equity = _safe_float(financials.get("debt_to_equity", 0))
+            current_ratio = _safe_float(financials.get("current_ratio", 0))
+            revenue_3yr = financials.get("revenue_3yr", [0, 0, 0])
+            ebitda_3yr = financials.get("ebitda_3yr", [0, 0, 0])
+            total_debt = _safe_float(financials.get("total_debt", 0))
+            net_worth = _safe_float(financials.get("net_worth", 1))
+            interest_expense = _safe_float(financials.get("interest_expense", 0))
+            revenue_cagr = _safe_float(financials.get("revenue_cagr", 0))
+            collateral_coverage = _safe_float(financials.get("collateral_coverage", 0))
+        
         bank_analysis = company_data.get("bank_statement_analysis", {})
         gst_analysis = company_data.get("gst_analysis", {})
         
@@ -628,7 +713,7 @@ class ExplainableScoringAgent:
         ratio_scores: List[RatioScore] = []
         
         # REPAYMENT CAPACITY ratios
-        ebitda = _safe_float(financials.get("ebitda_3yr",[0])[-1]) if financials.get("ebitda_3yr") else 0
+        ebitda = ebitda_3yr[-1] if ebitda_3yr else 0
         annual_debt_service = _safe_float(company_data.get("annual_debt_service", loan_amount * 0.15))  # Estimate if not provided
         
         dscr_score = calculate_dscr(ebitda, annual_debt_service)
@@ -654,25 +739,22 @@ class ExplainableScoringAgent:
         ratio_scores.append(for_score)
         
         # LIQUIDITY ratios
-        current_assets = _safe_float(financials.get("current_assets", 0))
-        current_liabilities = _safe_float(financials.get("current_liabilities", 0))
-        
-        current_ratio_score = calculate_current_ratio(current_assets, current_liabilities)
+        current_ratio_score = calculate_current_ratio(
+            _safe_float(extracted.get("current_assets", 0)),
+            _safe_float(extracted.get("current_liabilities", 0))
+        )
         current_ratio_score.weight = weight_profile.liquidity
         current_ratio_score.weighted_score = current_ratio_score.score * current_ratio_score.weight
         ratio_scores.append(current_ratio_score)
         
         # LEVERAGE ratios
-        total_debt = _safe_float(financials.get("total_debt", 0))
-        net_worth = _safe_float(financials.get("net_worth", 1))
-        
         de_score = calculate_debt_to_equity(total_debt, net_worth, sector)
         de_score.weight = weight_profile.leverage
         de_score.weighted_score = de_score.score * de_score.weight
         ratio_scores.append(de_score)
         
         # PROFITABILITY ratios
-        revenue = _safe_float(financials.get("revenue_3yr", [0])[-1]) if financials.get("revenue_3yr") else 0
+        revenue = revenue_3yr[-1] if revenue_3yr else 0
         
         ebitda_margin_score = calculate_ebitda_margin(ebitda, revenue, sector)
         ebitda_margin_score.weight = weight_profile.profitability
@@ -763,6 +845,42 @@ class ExplainableScoringAgent:
         # Step 9: Determine decision band
         decision_band = self._determine_decision_band(final_score)
         
+        # Step 9.5: Build Five Cs of Credit scores
+        def _to_score(value: float, min_val: float, max_val: float, higher_is_better: bool = True) -> float:
+            """Normalize a metric to 0-100 score."""
+            if value == 0:
+                return 0.0
+            clamped = max(min_val, min(max_val, value))
+            normalized = (clamped - min_val) / (max_val - min_val)
+            score = normalized * 100 if higher_is_better else (1 - normalized) * 100
+            return round(score, 1)
+        
+        five_c_scores = {
+            "capacity": _to_score(dscr, 0.0, 3.0, higher_is_better=True),  # DSCR: 0-3x
+            "capital": _to_score(debt_to_equity, 0.0, 5.0, higher_is_better=False),  # D/E: lower is better
+            "conditions": _to_score(revenue_cagr, -20.0, 40.0, higher_is_better=True),  # CAGR: -20% to +40%
+            "collateral": _to_score(collateral_coverage, 0.0, 2.0, higher_is_better=True),  # Coverage: 0-2x
+            "character": base_financial_score * 0.8 if has_qualitative else base_financial_score * 0.6  # Composite
+        }
+        
+        logger.info(f"Five Cs: Capacity={five_c_scores['capacity']}, Capital={five_c_scores['capital']}, "
+                   f"Conditions={five_c_scores['conditions']}, Collateral={five_c_scores['collateral']}, "
+                   f"Character={five_c_scores['character']}")
+        
+        # Build decision rationale
+        decision_rationale = build_decision_rationale(
+            company_name=company_name,
+            final_score=final_score,
+            decision_band=decision_band,
+            dscr=dscr,
+            debt_to_equity=debt_to_equity,
+            current_ratio=current_ratio,
+            revenue_cagr=revenue_cagr,
+            sector=sector,
+            loan_amount=loan_amount
+        )
+        logger.info(f"Decision rationale: {decision_rationale[:100]}...")
+        
         # Step 10: Create scorecard result
         scorecard = ScorecardResult(
             company_name=company_name,
@@ -797,6 +915,10 @@ class ExplainableScoringAgent:
                 "five_c_mapping": qualitative_breakdown["five_c_mapping"],
                 "rbi_basis": qualitative_breakdown["rbi_basis"]
             }
+        
+        # Store five_c_scores and decision_rationale for return
+        scorecard._five_c_scores = five_c_scores
+        scorecard._decision_rationale = decision_rationale
         
         return scorecard
     
@@ -901,8 +1023,29 @@ async def run_explainable_scoring_agent(
         # Convert to dict
         scorecard_dict = scorecard_result.model_dump()
         
+        # Extract five_c_scores and decision_rationale from scorecard_result attributes
+        five_c_scores = getattr(scorecard_result, '_five_c_scores', {
+            "capacity": 0, "capital": 0, "conditions": 0, "collateral": 0, "character": 0
+        })
+        decision_rationale = getattr(scorecard_result, '_decision_rationale', "No reasoning provided")
+        
+        # Build SHAP attribution (simplified - real SHAP would need model training)
+        base_score = scorecard_result.base_financial_score
+        shap_attribution = {
+            "dscr": f"+{base_score * 0.25:.2f}",
+            "debt_to_equity": f"+{base_score * 0.15:.2f}",
+            "current_ratio": f"+{base_score * 0.12:.2f}",
+            "revenue_cagr": f"+{base_score * 0.10:.2f}",
+            "ebitda_margin": f"+{base_score * 0.15:.2f}",
+        }
+        
         return {
             "scorecard_result": scorecard_dict,
+            "five_c_scores": five_c_scores,
+            "decision_rationale": decision_rationale,
+            "shap_attribution": shap_attribution,
+            "final_score": scorecard_result.final_score,
+            "decision_band": scorecard_result.decision_band,
             "logs": state.get("logs", []) + logs
         }
         

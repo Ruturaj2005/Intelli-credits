@@ -62,7 +62,7 @@ def _call_gemini_for_summary(state: Dict[str, Any]) -> str:
     )
     try:
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         response = model.generate_content(
             prompt,
@@ -597,7 +597,7 @@ Return ONLY valid JSON in this exact format:
         
         # Call Gemini
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         response = model.generate_content(
             prompt,

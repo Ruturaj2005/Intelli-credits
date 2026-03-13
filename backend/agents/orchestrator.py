@@ -44,8 +44,12 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
 
 def _call_gemini(prompt: str, max_tokens: int = 2048) -> str:
     """Call Gemini API with the given prompt."""
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not set")
+    
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     response = model.generate_content(
         prompt,
@@ -183,10 +187,10 @@ async def _forgery_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logs.append(_log("FORGERY_CHECK", "No documents to screen."))
         return {"logs": logs}
         
-    results = await screen_documents_batch(docs)
-    logs.append(_log("FORGERY_CHECK", f"Forgery check recommendation: {results['recommendation']}"))
+    results = screen_documents_batch(docs)
+    logs.append(_log("FORGERY_CHECK", f"Forgery check recommendation: {results.get('overall_recommendation', 'PROCEED')}"))
     
-    auto_reject = results["recommendation"] == "REJECT"
+    auto_reject = results.get("overall_recommendation") == "REJECT"
     reject_reason = results.get("rejection_reason", "")
     
     if auto_reject:

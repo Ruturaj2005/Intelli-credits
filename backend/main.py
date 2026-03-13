@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import uuid
@@ -52,6 +53,7 @@ from modules.entity_onboarding import (
     EntityProfile,
     EntityProfileResponse,
     LoanApplication,
+    LoanApplicationRequest,
     LoanApplicationResponse,
     generate_entity_id,
     generate_application_id,
@@ -305,10 +307,10 @@ async def create_entity_profile(profile: EntityProfile):
     if any("invalid" in v.lower() for v in validations.values()):
         validation_status = "validation_failed"
     
-    # Prepare document for MongoDB
+    # Prepare document for MongoDB (use mode='json' to serialize dates properly)
     entity_data = {
         "entity_id": entity_id,
-        "profile": profile.model_dump(),
+        "profile": profile.model_dump(mode='json'),
         "validations": validations,
         "created_at": datetime.now().isoformat(),
         "status": validation_status,
@@ -332,14 +334,7 @@ async def create_entity_profile(profile: EntityProfile):
 
 @app.post("/api/onboarding/loan-application", response_model=LoanApplicationResponse)
 async def create_loan_application(
-    entity_id: str = Form(...),
-    loan_type: str = Form(...),
-    loan_amount: float = Form(...),
-    loan_tenure_months: int = Form(...),
-    expected_interest_rate: Optional[float] = Form(None),
-    purpose: str = Form(...),
-    collateral_offered: Optional[str] = Form(None),
-    existing_banking_relationship: Optional[bool] = Form(False),
+    request: LoanApplicationRequest
 ):
     """
     Step 2: Create loan application linked to entity profile.
@@ -347,22 +342,14 @@ async def create_loan_application(
     """
     # Validate entity exists
     database = get_db()
-    entity = await database.entity_profiles.find_one({"entity_id": entity_id})
+    entity = await database.entity_profiles.find_one({"entity_id": request.entity_id})
     
     if not entity:
-        raise HTTPException(status_code=404, detail=f"Entity profile not found: {entity_id}")
+        raise HTTPException(status_code=404, detail=f"Entity profile not found: {request.entity_id}")
     
     # Create loan application model
     try:
-        loan_app = LoanApplication(
-            loan_type=loan_type,
-            loan_amount=loan_amount,
-            loan_tenure_months=loan_tenure_months,
-            expected_interest_rate=expected_interest_rate,
-            purpose=purpose,
-            collateral_offered=collateral_offered,
-            existing_banking_relationship=existing_banking_relationship,
-        )
+        loan_app = request.loan_application
     except ValueError as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {str(e)}")
     
@@ -371,14 +358,14 @@ async def create_loan_application(
     
     # Get required documents based on loan type
     from modules.entity_onboarding import LoanType
-    loan_type_enum = LoanType(loan_type)
+    loan_type_enum = LoanType(loan_app.loan_type)
     required_docs = get_required_documents(loan_type_enum)
     
-    # Prepare application document
+    # Prepare application document (use mode='json' to serialize dates properly)
     application_data = {
         "application_id": application_id,
-        "entity_id": entity_id,
-        "loan_application": loan_app.model_dump(),
+        "entity_id": request.entity_id,
+        "loan_application": loan_app.model_dump(mode='json'),
         "required_documents": required_docs,
         "status": "pending_documents",
         "created_at": datetime.now().isoformat(),
@@ -392,7 +379,7 @@ async def create_loan_application(
     
     return LoanApplicationResponse(
         application_id=application_id,
-        entity_id=entity_id,
+        entity_id=request.entity_id,
         status="pending_documents",
         message="Loan application submitted successfully",
         next_step="document_upload",
@@ -480,13 +467,13 @@ async def upload_and_classify_documents(
         try:
             if upload_file.filename.lower().endswith(".pdf"):
                 # Import here to avoid circular dependency
-                from tools.pdf_parser import extract_text_from_pdf
+                from tools.pdf_parser import extract_text_pymupdf
                 
-                text = extract_text_from_pdf(str(file_path))
+                text = extract_text_pymupdf(str(file_path))
             else:
                 text = content.decode('utf-8', errors='ignore')
         except Exception as e:
-            logger.warning(f"Failed to extract text from {upload_file.filename}: {e}")
+            logging.warning(f"Failed to extract text from {upload_file.filename}: {e}")
             text = ""
         
         # Classify document using extended classifier
@@ -533,13 +520,13 @@ async def upload_and_classify_documents(
             
             detected_documents.append(detected_doc)
             
-            logger.info(
+            logging.info(
                 f"Classified {upload_file.filename} as {doc_type.value if doc_type else 'UNKNOWN'} "
                 f"with confidence {confidence:.2f}"
             )
             
         except Exception as e:
-            logger.error(f"Classification error for {upload_file.filename}: {e}")
+            logging.error(f"Classification error for {upload_file.filename}: {e}")
             # Fallback to UNKNOWN
             detected_doc = DetectedDocument(
                 file_id=file_id,
@@ -636,12 +623,12 @@ async def confirm_document_classification(
         # Get filename from mapping
         filename = file_mapping.get(file_id)
         if not filename:
-            logger.warning(f"No filename found for file_id {file_id}, skipping")
+            logging.warning(f"No filename found for file_id {file_id}, skipping")
             continue
         
         file_path = app_upload_dir / filename
         if not file_path.exists():
-            logger.warning(f"File not found: {file_path}")
+            logging.warning(f"File not found: {file_path}")
             continue
         
         # Parse document using standard pipeline
@@ -662,7 +649,7 @@ async def confirm_document_classification(
             documents.append(parsed)
             
         except Exception as e:
-            logger.error(f"Failed to parse {file_path}: {e}")
+            logging.error(f"Failed to parse {file_path}: {e}")
             continue
     
     # Build initial state for pipeline
@@ -926,7 +913,7 @@ async def start_appraisal(
         if upload_file.filename.lower().endswith(".pdf"):
             from tools.pdf_parser import parse_with_intelligence
             
-            logger.info(f"Processing {safe_name} with advanced document intelligence pipeline")
+            logging.info(f"Processing {safe_name} with advanced document intelligence pipeline")
             parsed = parse_with_intelligence(
                 str(file_path), 
                 doc_type,
@@ -941,7 +928,7 @@ async def start_appraisal(
             if overall_conf >= 0.7:
                 parsed["extraction_status"] = "ACCEPTED"
                 parsed["confidence_warning"] = None
-                logger.info(f"✓ {safe_name}: High confidence ({overall_conf:.1%}, {reliability})")
+                logging.info(f"✓ {safe_name}: High confidence ({overall_conf:.1%}, {reliability})")
             
             elif 0.5 <= overall_conf < 0.7:
                 parsed["extraction_status"] = "ACCEPTED_WITH_WARNING"
@@ -949,7 +936,7 @@ async def start_appraisal(
                     f"This document has moderate extraction confidence ({overall_conf:.0%}). "
                     f"Some financial metrics may require manual verification."
                 )
-                logger.warning(
+                logging.warning(
                     f"⚠ {safe_name}: Moderate confidence ({overall_conf:.1%}, {reliability}) - "
                     f"accepted with warning"
                 )
@@ -975,7 +962,7 @@ async def start_appraisal(
                 )
                 parsed["requires_manual_review"] = True
                 
-                logger.error(
+                logging.error(
                     f"✗ {safe_name}: Low confidence ({overall_conf:.1%}, {reliability}) - "
                     f"flagged for manual review"
                 )
@@ -997,7 +984,7 @@ async def start_appraisal(
             # Log validation issues if present
             validation = parsed.get("validation", {})
             if validation.get("flags"):
-                logger.warning(
+                logging.warning(
                     f"Validation flags for {safe_name}: "
                     f"{len(validation['flags'])} issue(s) detected"
                 )
@@ -1127,15 +1114,70 @@ async def download_cam(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found.")
 
     cam_path = state.get("cam_path", "")
-    if not cam_path or not Path(cam_path).exists():
-        raise HTTPException(status_code=404, detail="CAM document not yet generated.")
+    
+    # Debug logging
+    logging.info(f"Download request for job {job_id}")
+    logging.info(f"CAM path from state: {cam_path}")
+    logging.info(f"Path exists: {Path(cam_path).exists() if cam_path else 'No path'}")
+    
+    if not cam_path:
+        raise HTTPException(status_code=404, detail="CAM document path not found in job state. Pipeline may still be running.")
+    
+    cam_file = Path(cam_path)
+    if not cam_file.exists():
+        # Try to find the file in the expected directory
+        upload_dir = os.getenv("UPLOAD_DIR", "./uploads")
+        expected_dir = Path(upload_dir) / job_id
+        logging.info(f"Searching in directory: {expected_dir}")
+        
+        if expected_dir.exists():
+            docx_files = list(expected_dir.glob("CAM_*.docx"))
+            logging.info(f"Found {len(docx_files)} CAM files in directory")
+            if docx_files:
+                cam_path = str(docx_files[0])
+                logging.info(f"Using found file: {cam_path}")
+            else:
+                raise HTTPException(status_code=404, detail=f"CAM document file not found at {cam_path}. No CAM files in directory.")
+        else:
+            raise HTTPException(status_code=404, detail=f"CAM document not found at {cam_path}. Directory does not exist.")
 
     filename = Path(cam_path).name
+    logging.info(f"Serving CAM file: {filename}")
     return FileResponse(
         path=cam_path,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=filename,
     )
+
+
+@app.get("/api/debug/{job_id}")
+async def debug_job(job_id: str):
+    """TEMPORARY: Diagnostic endpoint to debug empty Results page"""
+    database = get_db()
+    job = await database.jobs.find_one({"job_id": job_id})
+    if not job:
+        return {"error": "job not found"}
+    
+    state = job.get("state", {})
+    return {
+        "agent_statuses": state.get("agent_statuses", {}),
+        "extracted_financials_keys": list(state.get("extracted_financials", {}).keys()),
+        "extracted_financials_sample": {
+            k: state["extracted_financials"][k]
+            for k in list(state.get("extracted_financials", {}).keys())[:10]
+        } if state.get("extracted_financials") else {},
+        "scorecard_result_keys": list(state.get("scorecard_result", {}).keys()),
+        "five_c_scores": state.get("five_c_scores"),
+        "five_c_in_scorecard": state.get("scorecard_result", {}).get("five_c_scores")
+                              or state.get("scorecard_result", {}).get("five_c_mapping"),
+        "decision_rationale": state.get("decision_rationale") 
+                              or state.get("scorecard_result", {}).get("decision_rationale"),
+        "final_score": state.get("final_score") 
+                       or state.get("scorecard_result", {}).get("final_score"),
+        "revenue_3yr": state.get("extracted_financials", {}).get("revenue_3yr"),
+        "ebitda_3yr": state.get("extracted_financials", {}).get("ebitda_3yr"),
+        "all_top_level_keys": [k for k in state.keys() if not k.startswith("_")]
+    }
 
 
 @app.get("/api/dashboard/summary")

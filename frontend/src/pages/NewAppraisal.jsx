@@ -9,6 +9,29 @@ import { Upload, FileText, CheckCircle2, Building2, IndianRupee, Layers, Eye, Us
 
 const API = '/api'
 
+// Helper function to safely extract error messages from API responses
+const getErrorMessage = (err, fallback = 'An error occurred') => {
+  if (typeof err === 'string') return err
+  
+  const detail = err.response?.data?.detail
+  if (!detail) return fallback
+  
+  // If detail is a string, return it
+  if (typeof detail === 'string') return detail
+  
+  // If detail is an array of validation errors (FastAPI format)
+  if (Array.isArray(detail)) {
+    return detail.map(e => e.msg || JSON.stringify(e)).join(', ')
+  }
+  
+  // If detail is an object, try to extract message
+  if (typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail)
+  }
+  
+  return fallback
+}
+
 const SECTORS = [
   'Manufacturing',
   'NBFC',
@@ -261,7 +284,7 @@ export default function NewAppraisal() {
       setEntityId(data.entity_id)
       setCurrentStep(2)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save entity profile')
+      setError(getErrorMessage(err, 'Failed to save entity profile'))
     } finally {
       setLoading(false)
     }
@@ -308,7 +331,7 @@ export default function NewAppraisal() {
       
       setCurrentStep(3)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save loan application')
+      setError(getErrorMessage(err, 'Failed to save loan application'))
     } finally {
       setLoading(false)
     }
@@ -391,7 +414,7 @@ export default function NewAppraisal() {
         }
       })
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to upload and classify documents. Check backend connection.')
+      setError(getErrorMessage(err, 'Failed to upload and classify documents. Check backend connection.'))
       setLoading(false)
     }
   }

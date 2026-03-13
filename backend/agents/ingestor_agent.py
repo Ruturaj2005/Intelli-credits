@@ -34,7 +34,7 @@ def _log(agent: str, message: str, level: str = "INFO") -> Dict[str, Any]:
 def _call_gemini(prompt: str, max_tokens: int = 4096) -> str:
     """Call Gemini API and return the raw response text."""
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     response = model.generate_content(
         prompt,
@@ -102,6 +102,68 @@ def _default_financials() -> Dict[str, Any]:
         "gst_vs_bank_discrepancy": {"detected": False, "details": "", "severity": "LOW"},
         "red_flags": [],
     }
+
+
+# ─── Helper Functions for Safe Conversion and Array Building ──────────────────
+
+def safe_float(value):
+    """
+    Safely convert value to float, handling None, strings, commas.
+    Returns 0.0 if conversion fails.
+    """
+    if value is None or value == "":
+        return 0.0
+    try:
+        if isinstance(value, str):
+            value = value.replace(',', '').strip()
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _build_3yr_array(parsed: dict, base_key: str, aliases: list = None) -> list:
+    """
+    Build a 3-element array [FY22, FY23, FY24] from parsed financials.
+    Tries base_key, then aliases, for each year.
+    Returns [0.0, 0.0, 0.0] if not found.
+    """
+    if aliases is None:
+        aliases = []
+    
+    result = []
+    for year in ["fy22", "fy23", "fy24"]:
+        # Try base_key with year suffix
+        keys_to_try = [f"{base_key}_{year}", f"{base_key}_{year.upper()}"]
+        # Try aliases with year suffix
+        for alias in aliases:
+            keys_to_try.extend([f"{alias}_{year}", f"{alias}_{year.upper()}"])
+        
+        value = 0.0
+        for key in keys_to_try:
+            if key in parsed:
+                value = safe_float(parsed[key])
+                break
+        result.append(value)
+    
+    return result
+
+
+def _calculate_cagr(revenue_array: list) -> float:
+    """
+    Calculate 2-year CAGR from [FY22, FY23, FY24] revenue array.
+    CAGR = ((FY24 / FY22) ^ (1/2)) - 1
+    Returns 0.0 if calculation fails or FY22 is 0.
+    """
+    if len(revenue_array) < 3:
+        return 0.0
+    fy22, fy24 = revenue_array[0], revenue_array[2]
+    if fy22 <= 0 or fy24 <= 0:
+        return 0.0
+    try:
+        cagr = ((fy24 / fy22) ** 0.5) - 1
+        return round(cagr * 100, 2)  # Return as percentage
+    except (ValueError, ZeroDivisionError):
+        return 0.0
 
 
 # ─── Additional Red Flag Rules ────────────────────────────────────────────────
@@ -466,7 +528,7 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # Configure Gemini model for schema extraction
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-        gemini_model = genai.GenerativeModel('gemini-1.5-pro')
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
         
         for file_id, schema_config in selected_schemas.items():
             schema_id = schema_config.get("schema_id")
@@ -641,6 +703,60 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
             "medium_confidence_count": 0,
             "low_confidence_count": 0,
         }
+
+    # ── Step 7: Restructure extracted_financials with explicit field mapping ──
+    logs.append(_log(agent, "Building explicit financial metrics for downstream agents..."))
+    
+    fin = extracted.get("financials", {})
+    loan_amt = state.get("loan_amount", 0)
+    
+    # Build 3-year arrays with helper function
+    revenue_3yr = _build_3yr_array(fin, "revenue", ["total_revenue", "sales"])
+    ebitda_3yr = _build_3yr_array(fin, "ebitda", ["operating_profit"])
+    pat_3yr = _build_3yr_array(fin, "pat", ["net_profit", "profit_after_tax"])
+    
+    # Calculate CAGR
+    revenue_cagr = _calculate_cagr(revenue_3yr)
+    
+    # Read single-value metrics with safe conversion
+    total_debt = safe_float(fin.get("total_debt", 0))
+    net_worth = safe_float(fin.get("net_worth", 0))
+    current_assets = safe_float(fin.get("current_assets", 0))
+    current_liabilities = safe_float(fin.get("current_liabilities", 0))
+    interest_expense = safe_float(fin.get("interest_expense", 0))
+    ebitda_latest = ebitda_3yr[2] if len(ebitda_3yr) > 2 else 0.0
+    
+    # Calculate derived metrics
+    dscr = round(ebitda_latest / interest_expense, 2) if interest_expense > 0 else 0.0
+    debt_to_equity = round(total_debt / net_worth, 2) if net_worth > 0 else 0.0
+    current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else 0.0
+    
+    # Collateral coverage
+    collateral_value = safe_float(extracted.get("collateral", {}).get("estimated_value", 0))
+    collateral_coverage = round(collateral_value / loan_amt, 2) if loan_amt > 0 else 0.0
+    
+    # Update extracted dict with explicit flat fields (for frontend/scorer)
+    extracted["dscr"] = dscr
+    extracted["debt_to_equity"] = debt_to_equity
+    extracted["current_ratio"] = current_ratio
+    extracted["revenue_3yr"] = revenue_3yr
+    extracted["ebitda_3yr"] = ebitda_3yr
+    extracted["pat_3yr"] = pat_3yr
+    extracted["revenue_cagr"] = revenue_cagr
+    extracted["collateral_coverage"] = collateral_coverage
+    extracted["total_debt"] = total_debt
+    extracted["net_worth"] = net_worth
+    extracted["interest_expense"] = interest_expense
+    
+    logs.append(
+        _log(
+            agent,
+            f"Built explicit metrics: DSCR={dscr}, D/E={debt_to_equity}, "
+            f"Current Ratio={current_ratio}, Revenue CAGR={revenue_cagr}%, "
+            f"Collateral Coverage={collateral_coverage}",
+            level="SUCCESS"
+        )
+    )
 
     # Propagate extracted fields to state for downstream agents
     out_state = {

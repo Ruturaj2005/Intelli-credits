@@ -3,7 +3,7 @@
  * Shows AI-detected document types with confidence scores and allows user override
  */
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useLocation } from 'react-router-dom'
 import axios from 'axios'
 import {
   FileText,
@@ -99,7 +99,7 @@ const getConfidenceBadge = (level, userModified) => {
 export default function ClassificationReview() {
   const navigate = useNavigate()
   const { applicationId } = useParams()
-  const location = window.location
+  const location = useLocation()
   
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -112,7 +112,7 @@ export default function ClassificationReview() {
   // Load classification data from navigation state
   useEffect(() => {
     // Get data passed from NewAppraisal via navigate state
-    const state = history.state?.usr
+    const state = location.state
     
     if (!state || !state.classificationData) {
       setError('No classification data found. Please upload documents first.')
@@ -121,7 +121,7 @@ export default function ClassificationReview() {
     
     setClassificationData(state.classificationData)
     setQualitativeInputs(state.qualitativeInputs || null)
-  }, [applicationId])
+  }, [applicationId, location])
 
   // Handle document type override
   const handleOverride = (fileId, newType) => {

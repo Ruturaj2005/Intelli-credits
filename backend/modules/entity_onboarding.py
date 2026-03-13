@@ -58,12 +58,12 @@ class EntityProfile(BaseModel):
     Includes CIN and PAN validation per Indian regulatory formats.
     """
     company_name: str = Field(..., min_length=2, max_length=200, description="Legal name of the entity")
-    cin: str = Field(..., pattern=r"^[A-Z]{1}[0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$", 
+    cin: Optional[str] = Field(None, pattern=r"^[A-Z]{1}[0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$", 
                      description="Corporate Identification Number (21 characters)")
-    pan: str = Field(..., pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$", 
+    pan: Optional[str] = Field(None, pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$", 
                      description="Permanent Account Number (10 characters)")
     sector: SectorType = Field(..., description="Business sector/industry")
-    annual_turnover: float = Field(..., gt=0, description="Annual turnover in ₹ Crores")
+    annual_turnover: Optional[float] = Field(None, gt=0, description="Annual turnover in ₹ Crores")
     date_of_incorporation: Optional[date] = Field(None, description="Date of incorporation")
     registered_address: Optional[str] = Field(None, max_length=500, description="Registered office address")
     business_model: Optional[BusinessModel] = Field(None, description="Business model type")
@@ -71,9 +71,11 @@ class EntityProfile(BaseModel):
     
     @field_validator('cin')
     @classmethod
-    def validate_cin(cls, v: str) -> str:
+    def validate_cin(cls, v: Optional[str]) -> Optional[str]:
         """Validate CIN format and structure"""
-        if not v or len(v) != 21:
+        if v is None or v == '':
+            return None
+        if len(v) != 21:
             raise ValueError("CIN must be exactly 21 characters")
         
         # First character: Company type (U=Unlisted, L=Listed)
@@ -109,9 +111,11 @@ class EntityProfile(BaseModel):
     
     @field_validator('pan')
     @classmethod
-    def validate_pan(cls, v: str) -> str:
+    def validate_pan(cls, v: Optional[str]) -> Optional[str]:
         """Validate PAN format"""
-        if not v or len(v) != 10:
+        if v is None or v == '':
+            return None
+        if len(v) != 10:
             raise ValueError("PAN must be exactly 10 characters")
         
         # First 5: Alphabets
@@ -156,10 +160,10 @@ class LoanApplication(BaseModel):
     """
     loan_type: LoanType = Field(..., description="Type of loan facility")
     loan_amount: float = Field(..., gt=0, description="Requested amount in ₹ Crores")
-    loan_tenure_months: int = Field(..., gt=0, le=360, description="Loan tenure in months (max 30 years)")
+    loan_tenure_months: Optional[int] = Field(None, gt=0, le=360, description="Loan tenure in months (max 30 years)")
     expected_interest_rate: Optional[float] = Field(None, ge=5.0, le=25.0, 
                                                       description="Expected interest rate in % p.a.")
-    purpose: str = Field(..., min_length=10, max_length=1000, description="Purpose of loan")
+    purpose: Optional[str] = Field(None, min_length=10, max_length=1000, description="Purpose of loan")
     collateral_offered: Optional[str] = Field(None, max_length=500, description="Collateral/security offered")
     existing_banking_relationship: Optional[bool] = Field(False, 
                                                            description="Existing relationship with the bank")
@@ -197,6 +201,28 @@ class EntityProfileResponse(BaseModel):
                     "cin_format": "valid",
                     "pan_format": "valid",
                     "company_name": "valid"
+                }
+            }
+        }
+
+
+class LoanApplicationRequest(BaseModel):
+    """Request model for loan application submission"""
+    entity_id: str
+    loan_application: LoanApplication
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "entity_id": "ENT_2026031122001",
+                "loan_application": {
+                    "loan_type": "term_loan",
+                    "loan_amount": 5000000,
+                    "loan_tenure_months": 60,
+                    "expected_interest_rate": 9.5,
+                    "purpose": "Working capital expansion",
+                    "collateral_offered": "Property worth 8000000",
+                    "existing_banking_relationship": True
                 }
             }
         }

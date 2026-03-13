@@ -14,6 +14,29 @@ import RedFlagCard from '../components/RedFlagCard.jsx'
 
 const API = '/api'
 
+// Helper function to safely extract error messages from API responses
+const getErrorMessage = (err, fallback = 'An error occurred') => {
+  if (typeof err === 'string') return err
+  
+  const detail = err.response?.data?.detail
+  if (!detail) return fallback
+  
+  // If detail is a string, return it
+  if (typeof detail === 'string') return detail
+  
+  // If detail is an array of validation errors (FastAPI format)
+  if (Array.isArray(detail)) {
+    return detail.map(e => e.msg || JSON.stringify(e)).join(', ')
+  }
+  
+  // If detail is an object, try to extract message
+  if (typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail)
+  }
+  
+  return fallback
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function fmt(v, dp = 2) {
@@ -178,7 +201,7 @@ export default function Results() {
           setTimeout(fetch, 3000)
           return
         }
-        setError(err.response?.data?.detail || 'Failed to load results.')
+        setError(getErrorMessage(err, 'Failed to load results.'))
       } finally {
         setLoading(false)
       }
@@ -227,20 +250,36 @@ export default function Results() {
 
   if (!data) return null
 
-  const rec = data.final_recommendation || {}
-  const scores = data.five_cs_scores || {}
+  // ── Step 1: Read financial data with flat structure (new) and nested fallback (old) ──
   const extracted = data.extracted_financials || {}
   const fin = extracted.financials || {}
+  
+  // Try flat structure first, fallback to nested
+  const revenue = extracted.revenue_3yr || fin.revenue_3yr || [0, 0, 0]
+  const ebitda = extracted.ebitda_3yr || fin.ebitda_3yr || [0, 0, 0]
+  const pat = extracted.pat_3yr || fin.pat_3yr || [0, 0, 0]
+  const dscr = extracted.dscr || fin.dscr || 0
+  const debtToEquity = extracted.debt_to_equity || fin.debt_to_equity || 0
+  const revenueCagr = extracted.revenue_cagr || fin.revenue_cagr || 0
+  const collateralCoverage = extracted.collateral_coverage || fin.collateral_coverage || 0
+  
+  // ── Step 2: Read Five Cs scores with multiple fallback locations ──
+  const scorecard = data.scorecard_result || {}
+  const fiveC = data.five_c_scores || scorecard.five_c_scores || {}
+  
+  // ── Step 3: Read decision rationale ──
+  const decisionRationale = data.decision_rationale || scorecard.decision_rationale || "No reasoning provided"
+  
+  // ── Step 4: Other data ──
+  const rec = data.final_recommendation || {}
   const research = data.research_findings || {}
   const flags = extracted.red_flags || []
   const arb = data.arbitration_result || {}
   const overrideApplied = data.override_applied
   const preOverride = data.pre_override_scores || {}
   const turnaround = calcTurnaround(data.started_at, data.completed_at)
-
-  const revenue = fin.revenue_3yr || [0, 0, 0]
-  const ebitda = fin.ebitda_3yr || [0, 0, 0]
-  const pat = fin.pat_3yr || [0, 0, 0]
+  
+  // Build 3-year financial chart data
   const years = ['FY22', 'FY23', 'FY24']
   const barData = years.map((yr, i) => ({
     yr,
@@ -249,8 +288,8 @@ export default function Results() {
     PAT: Number(pat[i] || 0).toFixed(2),
   }))
 
-  const supplementary = scores.supplementary || {}
-  const shap = scores.shap_attributions || {}
+  const supplementary = fiveC.supplementary || {}
+  const shap = data.shap_attribution || {}
 
   const C_ORDER = ['character', 'capacity', 'capital', 'collateral', 'conditions']
   const C_WEIGHTS = { character: 25, capacity: 30, capital: 20, collateral: 15, conditions: 10 }
@@ -342,7 +381,7 @@ export default function Results() {
         <div className="card p-6">
           <h2 className="font-syne font-semibold text-[#e8f0f5] mb-1">Five Cs Radar</h2>
           <p className="text-[11px] text-[#4a6070] mb-4">Click any C below to see full reasoning</p>
-          <FiveCsRadar scores={scores} />
+          <FiveCsRadar scores={fiveC} />
           <div className="flex flex-wrap gap-2 mt-4 justify-center">
             {C_ORDER.map((c) => (
               <button
@@ -350,7 +389,7 @@ export default function Results() {
                 onClick={() => setExplainer(c)}
                 className="text-[11px] px-3 py-1.5 rounded-full border border-[#1a2530] text-[#4a6070] hover:border-[#00d4aa] hover:text-[#00d4aa] transition-colors cursor-pointer"
               >
-                {c.charAt(0).toUpperCase() + c.slice(1)}: <span className="font-mono">{scores[c]?.score || 0}</span>
+                {c.charAt(0).toUpperCase() + c.slice(1)}: <span className="font-mono">{fiveC[c] || 0}</span>
               </button>
             ))}
           </div>
@@ -390,21 +429,21 @@ export default function Results() {
       <div className="grid grid-cols-5 gap-3 mb-6">
         <MetricCard
           label="DSCR"
-          value={fmt(supplementary.dscr || fin.dscr, 2)}
+          value={fmt(dscr, 2)}
           unit="x"
-          sub={Number(supplementary.dscr || fin.dscr) >= 1.25 ? 'Adequate ✓' : 'Below threshold ✗'}
-          color={Number(supplementary.dscr || fin.dscr) >= 1.25 ? '#00d4aa' : '#ef476f'}
+          sub={Number(dscr) >= 1.25 ? 'Adequate ✓' : 'Below threshold ✗'}
+          color={Number(dscr) >= 1.25 ? '#00d4aa' : '#ef476f'}
         />
         <MetricCard
           label="Debt / Equity"
-          value={fmt(supplementary.debt_to_equity || fin.debt_to_equity, 2)}
+          value={fmt(debtToEquity, 2)}
           unit="x"
-          sub={Number(supplementary.debt_to_equity || fin.debt_to_equity) <= 3 ? 'Acceptable ✓' : 'High ✗'}
-          color={Number(supplementary.debt_to_equity || fin.debt_to_equity) <= 3 ? '#00d4aa' : '#ef476f'}
+          sub={Number(debtToEquity) <= 3 ? 'Acceptable ✓' : 'High ✗'}
+          color={Number(debtToEquity) <= 3 ? '#00d4aa' : '#ef476f'}
         />
         <MetricCard
           label="Revenue CAGR"
-          value={supplementary.revenue_cagr_pct ? fmt(supplementary.revenue_cagr_pct, 1) : '—'}
+          value={revenueCagr ? fmt(revenueCagr, 1) : '—'}
           unit="%"
           color="#0099ff"
         />
@@ -663,7 +702,7 @@ export default function Results() {
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-[#ef476f]" />
                   <span className="text-sm text-[#e8f0f5]">
-                    Low (<50%): <span className="font-mono font-bold">{data.ingestion_summary.low_confidence_count || 0}</span>
+                    Low (&lt;50%): <span className="font-mono font-bold">{data.ingestion_summary.low_confidence_count || 0}</span>
                   </span>
                 </div>
               </div>
@@ -931,7 +970,7 @@ export default function Results() {
       {/* Why This Decision */}
       <div className="card p-6 mb-6">
         <h2 className="font-syne font-semibold text-[#e8f0f5] mb-4">💡 Why This Decision?</h2>
-        <p className="text-sm text-[#e8f0f5] leading-relaxed">{rec.decision_reason || 'No reasoning provided.'}</p>
+        <p className="text-sm text-[#e8f0f5] leading-relaxed">{decisionRationale}</p>
         {rec.overriding_factors?.length > 0 && (
           <div className="mt-4 pt-4 border-t border-[#1a2530]">
             <p className="text-[11px] text-[#4a6070] uppercase tracking-wider mb-2">Overriding Factors</p>
@@ -960,11 +999,10 @@ export default function Results() {
             </thead>
             <tbody>
               {C_ORDER.map((c) => {
-                const cd = scores[c] || {}
-                const s = Number(cd.score || 0)
-                const w = cd.weight || C_WEIGHTS[c] / 100
-                const ws = s * w
-                const attr = shap[c] || 0
+                const score = Number(fiveC[c] || 0)
+                const weight = C_WEIGHTS[c] / 100
+                const weightedScore = score * weight
+                const attr = Number(shap[c]?.replace(/[+]/g, '') || 0)
                 return (
                   <tr
                     key={c}
@@ -972,9 +1010,9 @@ export default function Results() {
                     onClick={() => setExplainer(c)}
                   >
                     <td className="px-4 py-3 font-semibold text-[#e8f0f5] capitalize">{c}</td>
-                    <td className="px-4 py-3 font-mono text-[#00d4aa]">{s.toFixed(0)}</td>
+                    <td className="px-4 py-3 font-mono text-[#00d4aa]">{score.toFixed(0)}</td>
                     <td className="px-4 py-3 font-mono text-[#4a6070]">{C_WEIGHTS[c]}%</td>
-                    <td className="px-4 py-3 font-mono text-[#e8f0f5]">{ws.toFixed(1)}</td>
+                    <td className="px-4 py-3 font-mono text-[#e8f0f5]">{weightedScore.toFixed(1)}</td>
                     <td className="px-4 py-3 font-mono">
                       <span className={attr >= 0 ? 'text-[#00d4aa]' : 'text-[#ef476f]'}>
                         {attr >= 0 ? '+' : ''}{attr.toFixed(2)}
@@ -989,7 +1027,7 @@ export default function Results() {
                 <td className="px-4 py-3" />
                 <td className="px-4 py-3 font-mono text-[#4a6070]">100%</td>
                 <td className="px-4 py-3 font-mono font-bold text-[#00d4aa] text-base">
-                  {fmt(scores.weighted_total, 1)}
+                  {fmt(C_ORDER.reduce((sum, c) => sum + (Number(fiveC[c] || 0) * (C_WEIGHTS[c] / 100)), 0), 1)}
                 </td>
                 <td className="px-4 py-3" />
                 <td />

@@ -21,6 +21,29 @@ import {
 
 const API = '/api'
 
+// Helper function to safely extract error messages from API responses
+const getErrorMessage = (err, fallback = 'An error occurred') => {
+  if (typeof err === 'string') return err
+  
+  const detail = err.response?.data?.detail
+  if (!detail) return fallback
+  
+  // If detail is a string, return it
+  if (typeof detail === 'string') return detail
+  
+  // If detail is an array of validation errors (FastAPI format)
+  if (Array.isArray(detail)) {
+    return detail.map(e => e.msg || JSON.stringify(e)).join(', ')
+  }
+  
+  // If detail is an object, try to extract message
+  if (typeof detail === 'object') {
+    return detail.msg || detail.message || JSON.stringify(detail)
+  }
+  
+  return fallback
+}
+
 // Format schema field count
 const formatFieldCount = (count) => {
   return `${count} field${count !== 1 ? 's' : ''}`
@@ -94,7 +117,7 @@ export default function SchemaSelection() {
         setSelectedSchemas(defaults)
         setLoading(false)
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load schema templates')
+        setError(getErrorMessage(err, 'Failed to load schema templates'))
         setLoading(false)
       }
     }
@@ -180,7 +203,7 @@ export default function SchemaSelection() {
       // Redirect to pipeline
       navigate(`/appraisal/${data.job_id}/pipeline`)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save schema configuration')
+      setError(getErrorMessage(err, 'Failed to save schema configuration'))
       setSubmitting(false)
     }
   }
