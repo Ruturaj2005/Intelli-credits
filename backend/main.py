@@ -841,60 +841,32 @@ async def select_schemas(request: SchemaSelectionRequest):
 @app.post("/api/appraisal/start", response_model=AppraisalStartResponse)
 async def start_appraisal(
     background_tasks: BackgroundTasks,
-    application_id: Optional[str] = Form(None),  # NEW: Link to entity onboarding
     company_name: str = Form(...),
     sector: str = Form(...),
-    loan_amount: float = Form(0.0),
-    qualitative_notes: str = Form(""),
-    qualitative_inputs: str = Form("{}"),
-    annual_report: Optional[UploadFile] = File(None),
-    gst_returns: Optional[UploadFile] = File(None),
-    bank_statements: Optional[UploadFile] = File(None),
-    itr: Optional[UploadFile] = File(None),
-    legal_documents: Optional[UploadFile] = File(None),
-    mca_filings: Optional[UploadFile] = File(None),
-    rating_report: Optional[UploadFile] = File(None),
-    cibil_report: Optional[UploadFile] = File(None),
-    shareholding: Optional[UploadFile] = File(None),
-    sanction_letters: Optional[UploadFile] = File(None),
-    audited_financials: Optional[UploadFile] = File(None),
+    loan_amount: float = Form(...),
+    loan_type: str = Form(...),
+    annual_reports: List[UploadFile] = File(default=[]),
+    annual_report_years: List[str] = Form(default=[]),
+    documents: List[UploadFile] = File(default=[]),
+    document_types: List[str] = Form(default=[]),
 ):
     """
-    Accept multipart form with up to 11 document uploads and qualitative assessments.
+    Accept multipart form with multi-year annual reports and additional documents.
     Kick off the appraisal pipeline as a background task.
     """
-    job_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())[:8].upper()
     job_dir = UPLOAD_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse qualitative inputs
-    try:
-        qualitative_data = json.loads(qualitative_inputs) if qualitative_inputs else {}
-    except json.JSONDecodeError:
-        qualitative_data = {}
+    saved_docs: List[Dict[str, Any]] = []
 
-    # ── Save uploaded files ───────────────────────────────────────────────────
-    upload_mapping = {
-        "annual_report": annual_report,
-        "gst_returns": gst_returns,
-        "bank_statements": bank_statements,
-        "itr": itr,
-        "legal_documents": legal_documents,
-        "mca_filings": mca_filings,
-        "rating_report": rating_report,
-        "cibil_report": cibil_report,
-        "shareholding": shareholding,
-        "sanction_letters": sanction_letters,
-        "audited_financials": audited_financials,
-    }
-
-    documents: List[Dict[str, Any]] = []
-
-    for doc_type, upload_file in upload_mapping.items():
-        if upload_file is None or upload_file.filename == "":
+    # Save annual reports with year metadata
+    for idx, upload_file in enumerate(annual_reports):
+        if upload_file is None or not upload_file.filename:
             continue
 
-        # Validate file size
+        fiscal_year = annual_report_years[idx] if idx < len(annual_report_years) else "FY_UNKNOWN"
+
         content = await upload_file.read()
         size_mb = len(content) / (1024 * 1024)
         if size_mb > MAX_FILE_SIZE_MB:
@@ -903,120 +875,59 @@ async def start_appraisal(
                 detail=f"{upload_file.filename} exceeds {MAX_FILE_SIZE_MB}MB limit.",
             )
 
-        # Save to disk
+        safe_name = upload_file.filename.replace("/", "_").replace("\\", "_")
+        file_name = f"annual_report_{fiscal_year}_{safe_name}"
+        file_path = job_dir / file_name
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        saved_docs.append(
+            {
+                "doc_type": "annual_report",
+                "file_path": str(file_path),
+                "fiscal_year": fiscal_year,
+                "original_name": upload_file.filename,
+                "file_name": file_name,
+            }
+        )
+
+    # Save other supporting documents
+    for idx, upload_file in enumerate(documents):
+        if upload_file is None or not upload_file.filename:
+            continue
+
+        doc_type = document_types[idx] if idx < len(document_types) else "unknown"
+
+        content = await upload_file.read()
+        size_mb = len(content) / (1024 * 1024)
+        if size_mb > MAX_FILE_SIZE_MB:
+            raise HTTPException(
+                status_code=413,
+                detail=f"{upload_file.filename} exceeds {MAX_FILE_SIZE_MB}MB limit.",
+            )
+
         safe_name = upload_file.filename.replace("/", "_").replace("\\", "_")
         file_path = job_dir / safe_name
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # Parse document using Advanced Document Intelligence Pipeline
-        if upload_file.filename.lower().endswith(".pdf"):
-            from tools.pdf_parser import parse_with_intelligence
-            
-            logging.info(f"Processing {safe_name} with advanced document intelligence pipeline")
-            parsed = parse_with_intelligence(
-                str(file_path), 
-                doc_type,
-                use_advanced_pipeline=True
-            )
-            
-            # ── Confidence Threshold Gating ──────────────────────────────────
-            overall_conf = parsed.get("overall_confidence", 1.0)
-            reliability = parsed.get("reliability_score", "UNKNOWN")
-            
-            # Determine document status based on confidence
-            if overall_conf >= 0.7:
-                parsed["extraction_status"] = "ACCEPTED"
-                parsed["confidence_warning"] = None
-                logging.info(f"✓ {safe_name}: High confidence ({overall_conf:.1%}, {reliability})")
-            
-            elif 0.5 <= overall_conf < 0.7:
-                parsed["extraction_status"] = "ACCEPTED_WITH_WARNING"
-                parsed["confidence_warning"] = (
-                    f"This document has moderate extraction confidence ({overall_conf:.0%}). "
-                    f"Some financial metrics may require manual verification."
-                )
-                logging.warning(
-                    f"⚠ {safe_name}: Moderate confidence ({overall_conf:.1%}, {reliability}) - "
-                    f"accepted with warning"
-                )
-                
-                # Send WebSocket notification
-                if connection_id:
-                    await manager.send_json(
-                        connection_id,
-                        {
-                            "type": "document_quality_warning",
-                            "document": safe_name,
-                            "confidence": round(overall_conf, 3),
-                            "reliability": reliability,
-                            "message": "Moderate quality - manual verification recommended"
-                        }
-                    )
-            
-            else:  # confidence < 0.5
-                parsed["extraction_status"] = "REQUIRES_REVIEW"
-                parsed["confidence_warning"] = (
-                    f"This document has low extraction confidence ({overall_conf:.0%}). "
-                    f"Manual data entry is strongly recommended."
-                )
-                parsed["requires_manual_review"] = True
-                
-                logging.error(
-                    f"✗ {safe_name}: Low confidence ({overall_conf:.1%}, {reliability}) - "
-                    f"flagged for manual review"
-                )
-                
-                # Send WebSocket alert
-                if connection_id:
-                    await manager.send_json(
-                        connection_id,
-                        {
-                            "type": "document_quality_alert",
-                            "document": safe_name,
-                            "confidence": round(overall_conf, 3),
-                            "reliability": reliability,
-                            "message": "Low quality detected - manual review required",
-                            "warnings": parsed.get("validation", {}).get("warnings", [])
-                        }
-                    )
-            
-            # Log validation issues if present
-            validation = parsed.get("validation", {})
-            if validation.get("flags"):
-                logging.warning(
-                    f"Validation flags for {safe_name}: "
-                    f"{len(validation['flags'])} issue(s) detected"
-                )
-        
-        else:
-            # For Excel/CSV/other, store raw path reference
-            parsed = {
+        saved_docs.append(
+            {
+                "doc_type": doc_type or "unknown",
                 "file_path": str(file_path),
+                "original_name": upload_file.filename,
                 "file_name": safe_name,
-                "doc_type": doc_type,
-                "text": f"[Non-PDF file: {safe_name} — manual extraction required]",
-                "tables_text": "",
-                "page_count": 0,
-                "error": None,
-                "overall_confidence": 0.0,
-                "reliability_score": "MANUAL",
-                "extraction_status": "MANUAL_ENTRY_REQUIRED",
-                "requires_manual_review": True,
             }
-
-        documents.append(parsed)
+        )
 
     # ── Build initial state ───────────────────────────────────────────────────
     initial_state: Dict[str, Any] = {
         "job_id": job_id,
-        "application_id": application_id,  # Link to entity onboarding if provided
         "company_name": company_name.strip(),
         "sector": sector.strip(),
         "loan_amount_requested": loan_amount,
-        "qualitative_notes": qualitative_notes.strip(),
-        "qualitative_inputs": qualitative_data,
-        "documents": documents,
+        "loan_type": loan_type,
+        "documents": saved_docs,
         "extracted_financials": {},
         "fraud_flags": [],
         "research_findings": {},
@@ -1030,11 +941,11 @@ async def start_appraisal(
             {
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "agent": "SYSTEM",
-                "message": f"Job {job_id} created. {len(documents)} document(s) uploaded.",
+                "message": f"Job {job_id} created. {len(saved_docs)} document(s) uploaded.",
                 "level": "INFO",
             }
         ],
-        "status": "QUEUED",
+        "status": "PROCESSING",
         "conflict_detected": False,
         "agent_statuses": {
             "ingestor": "PENDING",
@@ -1052,7 +963,7 @@ async def start_appraisal(
 
     return AppraisalStartResponse(
         job_id=job_id,
-        message=f"Appraisal for '{company_name}' queued. {len(documents)} document(s) received.",
+        message=f"Appraisal started. {len(saved_docs)} document(s) received.",
     )
 
 

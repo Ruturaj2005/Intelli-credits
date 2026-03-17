@@ -166,6 +166,44 @@ def _calculate_cagr(revenue_array: list) -> float:
         return 0.0
 
 
+def _detect_fiscal_year(file_path: str, extracted: dict) -> str:
+    """
+    Detect fiscal year from filename or extracted payload.
+    Returns format: FY24, FY23, etc.
+    """
+    filename = os.path.basename(file_path).lower()
+
+    patterns = [
+        (r"fy[-_\s]?20?(\d{2})", lambda m: f"FY{m.group(1)}"),
+        (r"20(\d{2})[-_](\d{2})", lambda m: f"FY{m.group(2)}"),
+        (r"(\d{4})[-_](\d{2,4})", lambda m: f"FY{m.group(2)[-2:]}"),
+    ]
+
+    for pattern, formatter in patterns:
+        match = re.search(pattern, filename)
+        if match:
+            return formatter(match)
+
+    fiscal_from_doc = (extracted or {}).get("fiscal_year")
+    if fiscal_from_doc and isinstance(fiscal_from_doc, str):
+        fy = fiscal_from_doc.strip().upper().replace(" ", "")
+        if fy.startswith("FY") and len(fy) >= 4:
+            return fy[:4]
+
+    return f"FY_UNKNOWN_{hash(file_path) % 100}"
+
+
+def _calc_cagr(values: list) -> float:
+    """Calculate CAGR from a list of annual values."""
+    clean_values = [v for v in values if v and v > 0]
+    if len(clean_values) < 2:
+        return 0.0
+    try:
+        return round(((clean_values[-1] / clean_values[0]) ** (1 / (len(clean_values) - 1)) - 1) * 100, 1)
+    except Exception:
+        return 0.0
+
+
 # ─── Additional Red Flag Rules ────────────────────────────────────────────────
 
 def _filter_low_confidence_metrics(
@@ -358,6 +396,64 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     company_name = state.get("company_name", "Unknown Company")
     sector = state.get("sector", "")
     loan_amount = state.get("loan_amount_requested", 0)
+
+    # ── Multi-year annual report parsing (up to 5 years) ───────────────────
+    annual_reports = [
+        d for d in documents
+        if d.get("doc_type") in ("annual_report", "ANNUAL_REPORT")
+    ]
+    yearly_financials: Dict[str, Dict[str, Any]] = {}
+
+    if annual_reports:
+        logs.append(_log(agent, f"Processing {len(annual_reports)} annual report(s) for trend analysis..."))
+
+    for doc in annual_reports:
+        file_path = doc.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            logs.append(_log(agent, f"File not found: {file_path}", level="WARN"))
+            continue
+
+        file_name = os.path.basename(file_path)
+        logs.append(_log(agent, f"Parsing annual report: {file_name}"))
+
+        try:
+            from tools.document_intelligence.pdf_parser import extract_financials_from_pdf
+
+            extracted_year = extract_financials_from_pdf(file_path, sector=state.get("sector", "NBFC"))
+            if not extracted_year or extracted_year.get("_fields_extracted", 0) < 3:
+                logs.append(
+                    _log(
+                        agent,
+                        f"Low extraction from {file_name}: {extracted_year.get('_fields_extracted', 0)} fields",
+                        level="WARN",
+                    )
+                )
+
+            fiscal_year = doc.get("fiscal_year") or _detect_fiscal_year(file_path, extracted_year)
+            yearly_financials[fiscal_year] = extracted_year
+
+            logs.append(
+                _log(
+                    agent,
+                    f"{fiscal_year}: fields={extracted_year.get('_fields_extracted', 0)} | "
+                    f"Revenue={extracted_year.get('revenue')} | PAT={extracted_year.get('pat')} | "
+                    f"AUM={extracted_year.get('aum')}",
+                    level="SUCCESS",
+                )
+            )
+        except Exception as exc:
+            logs.append(_log(agent, f"Parse error on {file_name}: {exc}", level="ERROR"))
+
+    def _sort_fy_key(fy: str):
+        match = re.match(r"^FY(\d{2})$", fy or "")
+        if match:
+            return (0, int(match.group(1)))
+        return (1, str(fy))
+
+    sorted_years = sorted(yearly_financials.keys(), key=_sort_fy_key)
+
+    def build_trend(field: str) -> List[float]:
+        return [safe_float(yearly_financials[y].get(field) or 0) for y in sorted_years]
 
     # ── Step 1: GST Reconciliation ────────────────────────────────────────────
     logs.append(_log(agent, "Running GST GSTR-3B vs GSTR-2A reconciliation..."))
@@ -710,25 +806,80 @@ async def run_ingestor_agent(state: Dict[str, Any]) -> Dict[str, Any]:
     fin = extracted.get("financials", {})
     loan_amt = state.get("loan_amount", 0)
     
-    # Build 3-year arrays with helper function
-    revenue_3yr = _build_3yr_array(fin, "revenue", ["total_revenue", "sales"])
-    ebitda_3yr = _build_3yr_array(fin, "ebitda", ["operating_profit"])
-    pat_3yr = _build_3yr_array(fin, "pat", ["net_profit", "profit_after_tax"])
-    
-    # Calculate CAGR
-    revenue_cagr = _calculate_cagr(revenue_3yr)
+    # Build trend arrays from yearly annual reports when available.
+    if sorted_years:
+        latest_year = sorted_years[-1]
+        latest_data = yearly_financials.get(latest_year, {})
+
+        revenue_3yr = build_trend("revenue")
+        ebitda_3yr = build_trend("ebitda")
+        pat_3yr = build_trend("pat")
+        aum_3yr = build_trend("aum")
+        net_worth_3yr = build_trend("net_worth")
+        total_debt_3yr = build_trend("total_debt")
+
+        # Keep latest year's extracted values as canonical flat metrics.
+        for key, value in latest_data.items():
+            if not str(key).startswith("_"):
+                extracted[key] = value
+
+        extracted["revenue_3yr"] = revenue_3yr
+        extracted["ebitda_3yr"] = ebitda_3yr
+        extracted["pat_3yr"] = pat_3yr
+        extracted["aum_3yr"] = aum_3yr
+        extracted["net_worth_3yr"] = net_worth_3yr
+        extracted["total_debt_3yr"] = total_debt_3yr
+        extracted["chart_years"] = sorted_years
+        extracted["yearly_financials"] = yearly_financials
+        extracted["years_analysed"] = sorted_years
+
+        # Keep nested financials in sync since downstream agents read this bucket.
+        fin_bucket = extracted.setdefault("financials", {})
+        fin_bucket["revenue_3yr"] = revenue_3yr
+        fin_bucket["ebitda_3yr"] = ebitda_3yr
+        fin_bucket["pat_3yr"] = pat_3yr
+        fin_bucket["total_debt"] = safe_float(latest_data.get("total_debt", fin_bucket.get("total_debt", 0)))
+        fin_bucket["net_worth"] = safe_float(latest_data.get("net_worth", fin_bucket.get("net_worth", 0)))
+        fin_bucket["total_assets"] = safe_float(latest_data.get("total_assets", fin_bucket.get("total_assets", 0)))
+        if latest_data.get("debt_to_equity") is not None:
+            fin_bucket["debt_to_equity"] = safe_float(latest_data.get("debt_to_equity", 0))
+        if latest_data.get("dscr") is not None:
+            fin_bucket["dscr"] = safe_float(latest_data.get("dscr", 0))
+
+        revenue_cagr = _calc_cagr(revenue_3yr)
+        extracted["revenue_cagr"] = revenue_cagr
+        extracted["pat_cagr"] = _calc_cagr(pat_3yr)
+        extracted["aum_cagr"] = _calc_cagr(aum_3yr)
+
+        logs.append(
+            _log(
+                agent,
+                f"Multi-year extraction complete: {sorted_years} | Latest year: {latest_year}",
+                level="SUCCESS",
+            )
+        )
+    else:
+        revenue_3yr = _build_3yr_array(fin, "revenue", ["total_revenue", "sales"])
+        ebitda_3yr = _build_3yr_array(fin, "ebitda", ["operating_profit"])
+        pat_3yr = _build_3yr_array(fin, "pat", ["net_profit", "profit_after_tax"])
+        revenue_cagr = _calculate_cagr(revenue_3yr)
     
     # Read single-value metrics with safe conversion
-    total_debt = safe_float(fin.get("total_debt", 0))
-    net_worth = safe_float(fin.get("net_worth", 0))
+    total_debt = safe_float(fin.get("total_debt", extracted.get("total_debt", 0)))
+    net_worth = safe_float(fin.get("net_worth", extracted.get("net_worth", 0)))
     current_assets = safe_float(fin.get("current_assets", 0))
     current_liabilities = safe_float(fin.get("current_liabilities", 0))
     interest_expense = safe_float(fin.get("interest_expense", 0))
-    ebitda_latest = ebitda_3yr[2] if len(ebitda_3yr) > 2 else 0.0
+    ebitda_latest = ebitda_3yr[-1] if ebitda_3yr else 0.0
     
     # Calculate derived metrics
-    dscr = round(ebitda_latest / interest_expense, 2) if interest_expense > 0 else 0.0
-    debt_to_equity = round(total_debt / net_worth, 2) if net_worth > 0 else 0.0
+    parsed_dscr = safe_float(extracted.get("dscr", fin.get("dscr", 0)))
+    calc_dscr = round(ebitda_latest / interest_expense, 2) if interest_expense > 0 else 0.0
+    dscr = parsed_dscr if parsed_dscr > 0 else calc_dscr
+
+    parsed_d2e = safe_float(extracted.get("debt_to_equity", fin.get("debt_to_equity", 0)))
+    calc_d2e = round(total_debt / net_worth, 2) if net_worth > 0 else 0.0
+    debt_to_equity = parsed_d2e if parsed_d2e > 0 else calc_d2e
     current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else 0.0
     
     # Collateral coverage

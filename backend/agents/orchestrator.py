@@ -124,18 +124,40 @@ async def _run_arbitration(state: Dict[str, Any]) -> Dict[str, Any]:
         if not arb_result:
             arb_result = {
                 "conflict_detected": True,
-                "reconciliation_reasoning": "Arbitration parsing failed — defaulting to conservative risk weighting.",
+                "reconciliation_reasoning": "Arbitration parsing failed — defaulting to neutral risk weighting.",
+                "adjusted_risk_weight": 1.0,
+                "favors": "FINANCIALS",
+                "recommended_adjustments": [],
+            }
+    except Exception as exc:
+        err_text = str(exc)
+        is_auth_error = (
+            "403" in err_text
+            or "api key" in err_text.lower()
+            or "leaked" in err_text.lower()
+            or "permission denied" in err_text.lower()
+            or "unauthorized" in err_text.lower()
+        )
+
+        if is_auth_error:
+            arb_result = {
+                "conflict_detected": True,
+                "reconciliation_reasoning": (
+                    f"Arbitration unavailable due to Gemini auth error: {exc}. "
+                    "Using neutral fallback until API key is rotated."
+                ),
+                "adjusted_risk_weight": 1.0,
+                "favors": "FINANCIALS",
+                "recommended_adjustments": [],
+            }
+        else:
+            arb_result = {
+                "conflict_detected": True,
+                "reconciliation_reasoning": f"Arbitration error: {exc}. Defaulting to conservative assessment.",
                 "adjusted_risk_weight": 1.2,
                 "favors": "RESEARCH",
                 "recommended_adjustments": [],
             }
-    except Exception as exc:
-        arb_result = {
-            "conflict_detected": True,
-            "reconciliation_reasoning": f"Arbitration error: {exc}. Defaulting to conservative assessment.",
-            "adjusted_risk_weight": 1.2,
-            "favors": "RESEARCH",
-        }
 
     logs.append(
         _log(
@@ -165,7 +187,7 @@ async def _ingestor_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state.get("agent_statuses", {}),
         "ingestor": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 async def _research_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,7 +197,7 @@ async def _research_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **updates.get("agent_statuses", {}),
         "research": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 async def _forgery_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -185,7 +207,7 @@ async def _forgery_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
     
     if not docs:
         logs.append(_log("FORGERY_CHECK", "No documents to screen."))
-        return {"logs": logs}
+        return {**state, "logs": logs}
         
     results = screen_documents_batch(docs)
     logs.append(_log("FORGERY_CHECK", f"Forgery check recommendation: {results.get('overall_recommendation', 'PROCEED')}"))
@@ -197,6 +219,7 @@ async def _forgery_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logs.append(_log("FORGERY_CHECK", f"ORCHESTRATOR ALERT: {reject_reason}", level="ERROR"))
     
     return {
+        **state,
         "forgery_analysis": results,
         "auto_reject": auto_reject,
         "reject_reason": reject_reason,
@@ -231,6 +254,7 @@ async def _parallel_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     return {
+        **state,
         **ingestor_updates,
         **research_updates,
         "logs": merged_logs,
@@ -241,8 +265,10 @@ async def _parallel_node(state: Dict[str, Any]) -> Dict[str, Any]:
 async def _arbitration_check_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Check for conflict and run arbitration if needed."""
     if _should_arbitrate(state):
-        return await _run_arbitration(state)
+        arb_updates = await _run_arbitration(state)
+        return {**state, **arb_updates}
     return {
+        **state,
         "conflict_detected": False,
         "arbitration_result": {},
         "logs": [_log("ARBITRATOR", "No conflicting signals detected. Skipping arbitration.")],
@@ -560,6 +586,7 @@ async def _enrichment_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Return ALL enrichment data explicitly so LangGraph's state merge
     # propagates every key — no silent state mutations.
     return {
+        **state,
         **merged_data,
         "logs": logs,
         "agent_statuses": {**state.get("agent_statuses", {}), "enrichment": "DONE"},
@@ -573,7 +600,7 @@ async def _scorer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **updates.get("agent_statuses", {}),
         "scorer": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 async def _compliance_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -588,7 +615,7 @@ async def _compliance_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **updates.get("agent_statuses", {}),
         "compliance": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 def _check_compliance_result(state: Dict[str, Any]) -> str:
@@ -645,7 +672,7 @@ async def _bank_capacity_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **updates.get("agent_statuses", {}),
         "bank_capacity": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 def _check_capacity_result(state: Dict[str, Any]) -> str:
@@ -671,9 +698,10 @@ async def _explainable_scoring_node(state: Dict[str, Any]) -> Dict[str, Any]:
     updates["agent_statuses"] = {
         **state.get("agent_statuses", {}),
         **updates.get("agent_statuses", {}),
+        "scorer": "DONE",
         "explainable_scoring": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 async def _decision_engine_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -796,6 +824,7 @@ async def _decision_engine_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     
     return {
+        **state,
         "enhanced_final_decision": enhanced_decision.model_dump(),
         "final_decision": final_decision,
         "approved_amount": final_approved_amount,
@@ -814,7 +843,7 @@ async def _cam_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **updates.get("agent_statuses", {}),
         "cam_generator": "DONE",
     }
-    return updates
+    return {**state, **updates}
 
 
 # ─── Graph Construction ───────────────────────────────────────────────────────

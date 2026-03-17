@@ -171,7 +171,7 @@ class BankCapacityAgent:
         pca_check = self._check_pca_status()
         exposure_checks.append(pca_check)
         
-        if pca_check.status == ExposureStatus.HARD_BLOCK:
+        if getattr(pca_check, "severity", "GREEN") == ExposureStatus.HARD_BLOCK:
             logger.error("HARD BLOCK: Bank under PCA - cannot lend")
             return self._create_hard_block_result(
                 company_name, loan_amount_requested, exposure_checks,
@@ -215,7 +215,7 @@ class BankCapacityAgent:
         # ═══════════════════════════════════════════════════════════════════════
         # Calculate Maximum Lendable Amount
         # ═══════════════════════════════════════════════════════════════════════
-        can_lend = all(check.status != ExposureStatus.HARD_BLOCK for check in exposure_checks)
+        can_lend = all(getattr(check, "severity", "GREEN") != ExposureStatus.HARD_BLOCK for check in exposure_checks)
         
         if not can_lend:
             logger.error("HARD BLOCK: One or more exposure checks failed")
@@ -226,9 +226,9 @@ class BankCapacityAgent:
         
         # Find minimum max amount across all checks
         max_amounts = [
-            check.max_amount_allowed 
-            for check in exposure_checks 
-            if check.max_amount_allowed is not None
+            getattr(check, "headroom", 0.0)
+            for check in exposure_checks
+            if getattr(check, "headroom", 0.0) and getattr(check, "headroom", 0.0) > 0
         ]
         
         if max_amounts:
@@ -272,7 +272,7 @@ class BankCapacityAgent:
             psl_opportunity=psl_opportunity,
             provisioning_cost=provisioning,
             interest_rate_components=interest_rate_components,
-            final_interest_rate_pct=round(final_rate, 2),
+            final_rate_pct=round(final_rate, 2),
             capacity_remarks=self._generate_capacity_remarks(exposure_checks, psl_opportunity)
         )
         
@@ -295,10 +295,11 @@ class BankCapacityAgent:
                 check_name="PCA Status Check",
                 check_type="Regulatory Compliance",
                 regulatory_source="RBI Prompt Corrective Action Framework 2017",
-                status=ExposureStatus.HARD_BLOCK,
+                severity=ExposureStatus.HARD_BLOCK,
                 limit_value=0.0,
                 current_utilization=0.0,
                 post_loan_utilization=0.0,
+                headroom=0.0,
                 max_amount_allowed=0.0,
                 rationale="Bank is under RBI Prompt Corrective Action (PCA). All lending activities are prohibited until PCA restrictions are lifted.",
                 breached=True
@@ -308,10 +309,11 @@ class BankCapacityAgent:
                 check_name="PCA Status Check",
                 check_type="Regulatory Compliance",
                 regulatory_source="RBI Prompt Corrective Action Framework 2017",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
                 limit_value=1.0,
                 current_utilization=0.0,
                 post_loan_utilization=0.0,
+                headroom=0.0,
                 rationale="Bank is NOT under PCA. Lending permitted.",
                 breached=False
             )
@@ -350,7 +352,8 @@ class BankCapacityAgent:
                 check_name="Single Borrower Exposure",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI DoR.CRE.REC.30/13.03.000/2023-24",
-                status=status,
+                severity=status,
+                headroom=max_amount_allowed,
                 limit_value=limit_pct,
                 limit_display=f"{limit_pct}% of Eligible Capital = ₹{limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -364,7 +367,8 @@ class BankCapacityAgent:
                 check_name="Single Borrower Exposure",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI DoR.CRE.REC.30/13.03.000/2023-24",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
+                headroom=max(0.0, limit_amount - post_loan_exposure),
                 limit_value=limit_pct,
                 limit_display=f"{limit_pct}% of Eligible Capital = ₹{limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -407,7 +411,8 @@ class BankCapacityAgent:
                 check_name="Group Exposure",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI DoR.CRE.REC.30/13.03.000/2023-24",
-                status=status,
+                severity=status,
+                headroom=max_amount_allowed,
                 limit_value=limit_pct,
                 limit_display=f"{limit_pct}% of Eligible Capital = ₹{limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -421,7 +426,8 @@ class BankCapacityAgent:
                 check_name="Group Exposure",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI DoR.CRE.REC.30/13.03.000/2023-24",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
+                headroom=max(0.0, limit_amount - post_loan_exposure),
                 limit_value=limit_pct,
                 limit_display=f"{limit_pct}% of Eligible Capital = ₹{limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -455,13 +461,14 @@ class BankCapacityAgent:
             max_additional = sector_limit_amount - current_sector_exposure
             max_amount_allowed = max(0.0, max_additional)
             
-            status = ExposureStatus.AMBER if max_amount_allowed > 0 else ExposureStatus.RED
+            status = ExposureStatus.AMBER if max_amount_allowed > 0 else ExposureStatus.HARD_BLOCK
             
             return ExposureCheck(
                 check_name=f"Sector Concentration ({sector})",
                 check_type="Internal Policy Limit",
                 regulatory_source="Bank Internal Risk Policy",
-                status=status,
+                severity=status,
+                headroom=max_amount_allowed,
                 limit_value=sector_limit_pct,
                 limit_display=f"{sector_limit_pct}% of ANBC = ₹{sector_limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -475,7 +482,8 @@ class BankCapacityAgent:
                 check_name=f"Sector Concentration ({sector})",
                 check_type="Internal Policy Limit",
                 regulatory_source="Bank Internal Risk Policy",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
+                headroom=max(0.0, sector_limit_amount - post_loan_exposure),
                 limit_value=sector_limit_pct,
                 limit_display=f"{sector_limit_pct}% of ANBC = ₹{sector_limit_amount:,.0f}",
                 current_utilization=round(current_utilization_pct, 2),
@@ -501,19 +509,20 @@ class BankCapacityAgent:
         current_rwa = (self.bank_config.tier1_capital + self.bank_config.tier2_capital) / (self.bank_config.current_crar / 100)
         post_loan_rwa = current_rwa + additional_rwa
         post_loan_crar = ((self.bank_config.tier1_capital + self.bank_config.tier2_capital) / post_loan_rwa) * 100
+        max_rwa_increase = ((self.bank_config.tier1_capital + self.bank_config.tier2_capital) / (min_crar_pct / 100)) - current_rwa
         
         if post_loan_crar < min_crar_pct:
             # Calculate max loan amount that maintains min CRAR
-            max_rwa_increase = ((self.bank_config.tier1_capital + self.bank_config.tier2_capital) / (min_crar_pct / 100)) - current_rwa
             max_amount_allowed = max(0.0, max_rwa_increase)
             
-            status = ExposureStatus.HARD_BLOCK if max_amount_allowed == 0 else ExposureStatus.RED
+            status = ExposureStatus.HARD_BLOCK if max_amount_allowed == 0 else ExposureStatus.AMBER
             
             return ExposureCheck(
                 check_name="Capital Adequacy (CRAR) Impact",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI Basel III DBOD.No.BP.BC.50/21.06.201/2012-13",
-                status=status,
+                severity=status,
+                headroom=max_amount_allowed,
                 limit_value=min_crar_pct,
                 limit_display=f"Minimum CRAR {min_crar_pct}%",
                 current_utilization=round(self.bank_config.current_crar, 2),
@@ -527,7 +536,8 @@ class BankCapacityAgent:
                 check_name="Capital Adequacy (CRAR) Impact",
                 check_type="RBI Regulatory Limit",
                 regulatory_source="RBI Basel III DBOD.No.BP.BC.50/21.06.201/2012-13",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
+                headroom=max(0.0, max_rwa_increase),
                 limit_value=min_crar_pct,
                 limit_display=f"Minimum CRAR {min_crar_pct}%",
                 current_utilization=round(self.bank_config.current_crar, 2),
@@ -549,20 +559,30 @@ class BankCapacityAgent:
         - Minimum promoter contribution
         - Collateral coverage ratio
         """
-        policy_thresholds = self.bank_config.internal_policy_thresholds
-        
+        # Support both legacy dict-style thresholds and current BankConfig fields.
+        policy_thresholds = getattr(self.bank_config, "internal_policy_thresholds", {}) or {}
+
         # Business vintage check
         company_age_years = _safe_float(company_data.get("company_age_years", 0))
-        min_age = policy_thresholds.get("min_business_vintage_years", 3)
-        
+        min_age = _safe_float(
+            policy_thresholds.get("min_business_vintage_years", getattr(self.bank_config, "min_company_age_years", 3.0)),
+            3.0,
+        )
+
         # Promoter contribution check
         promoter_contribution_pct = _safe_float(company_data.get("promoter_contribution_pct", 0))
-        min_promoter_contrib = policy_thresholds.get("min_promoter_contribution_pct", 25.0)
-        
+        min_promoter_contrib = _safe_float(
+            policy_thresholds.get("min_promoter_contribution_pct", getattr(self.bank_config, "min_promoter_contribution_pct", 0.25) * 100),
+            25.0,
+        )
+
         # Collateral coverage
         collateral_value = _safe_float(company_data.get("collateral_value", 0))
         collateral_coverage = (collateral_value / loan_amount) if loan_amount > 0 else 0.0
-        min_collateral_coverage = policy_thresholds.get("min_collateral_coverage", 1.25)
+        min_collateral_coverage = _safe_float(
+            policy_thresholds.get("min_collateral_coverage", getattr(self.bank_config, "min_collateral_cover", 1.25)),
+            1.25,
+        )
         
         # Check all policies
         policy_violations = []
@@ -581,7 +601,8 @@ class BankCapacityAgent:
                 check_name="Internal Policy Guardrails",
                 check_type="Internal Policy",
                 regulatory_source="Bank Credit Policy Manual",
-                status=ExposureStatus.RED,
+                severity=ExposureStatus.AMBER,
+                headroom=loan_amount,
                 limit_value=0.0,
                 rationale=f"Policy violations: {'; '.join(policy_violations)}. Requires committee approval.",
                 breached=True
@@ -591,7 +612,8 @@ class BankCapacityAgent:
                 check_name="Internal Policy Guardrails",
                 check_type="Internal Policy",
                 regulatory_source="Bank Credit Policy Manual",
-                status=ExposureStatus.GREEN,
+                severity=ExposureStatus.GREEN,
+                headroom=loan_amount,
                 limit_value=1.0,
                 rationale="All internal policy guardrails met: vintage, promoter contribution, collateral coverage.",
                 breached=False
@@ -635,25 +657,18 @@ class BankCapacityAgent:
                 urgency = "Low Priority - Bank near PSL target"
             
             return PSLOpportunity(
-                qualifies_for_psl=True,
+                is_psl_eligible=True,
                 psl_category=psl_category,
-                psl_category_display=psl_category.value,
-                regulatory_source="RBI FIDD.CO.Plan.BC.5/04.09.01/2020-21",
-                current_psl_achievement_pct=round(current_psl_achievement, 2),
-                psl_target_pct=target_psl,
-                shortfall_pct=round(shortfall_pct, 2),
-                discount_bps=discount_bps,
+                current_psl_shortfall_pct=round(shortfall_pct, 2),
+                rate_discount_applicable=discount_bps,
                 discount_rationale=f"{urgency}. PSL discount: {discount_bps}bps applied."
             )
         else:
             return PSLOpportunity(
-                qualifies_for_psl=False,
+                is_psl_eligible=False,
                 psl_category=None,
-                psl_category_display="Not Eligible",
-                regulatory_source="RBI FIDD.CO.Plan.BC.5/04.09.01/2020-21",
-                current_psl_achievement_pct=round(self.bank_config.psl_achieved_pct, 2),
-                psl_target_pct=40.0,
-                discount_bps=0.0,
+                current_psl_shortfall_pct=max(0.0, 40.0 - self.bank_config.psl_achieved_pct),
+                rate_discount_applicable=0.0,
                 discount_rationale="Loan does not qualify for PSL. No pricing discount."
             )
     
@@ -685,14 +700,14 @@ class BankCapacityAgent:
             category = "Standard Corporate"
             source = "RBI Asset Classification & Provisioning"
         
-        provision_amount = loan_amount * (provision_pct / 100)
+        provision_rate = provision_pct / 100.0
+        provision_amount = loan_amount * provision_rate
         
         return ProvisioningCost(
-            provision_pct=provision_pct,
-            provision_amount=round(provision_amount, 2),
-            asset_category=category,
-            regulatory_source=source,
-            rationale=f"{category} assets require {provision_pct}% standard provisioning. Amount: ₹{provision_amount:,.2f}"
+            loan_category=category,
+            provisioning_rate_pct=round(provision_rate, 6),
+            annual_provisioning_cost=round(provision_amount, 2),
+            rbi_source=source,
         )
     
     def _build_interest_rate(
@@ -743,21 +758,22 @@ class BankCapacityAgent:
         
         # 3. RAROC Charge (Risk-Adjusted Return on Capital)
         raroc_target_roe = 18.0  # Bank's target ROE
-        provisioning_cost_bps = int(provisioning.provision_pct * 100)
+        provisioning_rate_pct = provisioning.provisioning_rate_pct * 100
+        provisioning_cost_bps = int(provisioning.provisioning_rate_pct * 10000)
         
         components.append(InterestRateComponent(
             component_name="RAROC Charge",
             rate_bps=provisioning_cost_bps,
             rate_display=f"{provisioning_cost_bps/100:.2f}%",
-            rationale=f"Risk-adjusted return to achieve target ROE of {raroc_target_roe}%. Includes {provisioning.provision_pct}% provisioning cost."
+            rationale=f"Risk-adjusted return to achieve target ROE of {raroc_target_roe}%. Includes {provisioning_rate_pct:.2f}% provisioning cost."
         ))
         
         # 4. PSL Discount (if applicable)
-        if psl_opportunity.qualifies_for_psl:
+        if psl_opportunity.is_psl_eligible:
             components.append(InterestRateComponent(
                 component_name="PSL Discount",
-                rate_bps=-int(psl_opportunity.discount_bps),
-                rate_display=f"-{psl_opportunity.discount_bps/100:.2f}%",
+                rate_bps=-int(psl_opportunity.rate_discount_applicable),
+                rate_display=f"-{psl_opportunity.rate_discount_applicable/100:.2f}%",
                 rationale=psl_opportunity.discount_rationale
             ))
         
@@ -802,18 +818,18 @@ class BankCapacityAgent:
         psl_opportunity: PSLOpportunity
     ) -> str:
         """Generate summary remarks."""
-        red_count = sum(1 for check in exposure_checks if check.status == ExposureStatus.RED)
-        amber_count = sum(1 for check in exposure_checks if check.status == ExposureStatus.AMBER)
+        hard_block_count = sum(1 for check in exposure_checks if check.severity == ExposureStatus.HARD_BLOCK)
+        amber_count = sum(1 for check in exposure_checks if check.severity == ExposureStatus.AMBER)
         
-        if red_count > 0:
-            remarks = f"{red_count} RED exposure flag(s). Requires committee/Board approval."
+        if hard_block_count > 0:
+            remarks = f"{hard_block_count} HARD BLOCK exposure flag(s). Lending not permitted."
         elif amber_count > 0:
             remarks = f"{amber_count} AMBER exposure flag(s). Monitor closely."
         else:
             remarks = "All exposure checks GREEN. Within all regulatory and internal limits."
         
-        if psl_opportunity.qualifies_for_psl:
-            remarks += f" PSL-eligible ({psl_opportunity.psl_category_display}): {psl_opportunity.discount_bps}bps discount applied."
+        if psl_opportunity.is_psl_eligible:
+            remarks += f" PSL-eligible ({psl_opportunity.psl_category}): {psl_opportunity.rate_discount_applicable}bps discount applied."
         
         return remarks
 
@@ -870,7 +886,7 @@ async def run_bank_capacity_agent(
         
         if capacity_result.can_lend:
             log(f"Bank CAN lend. Max amount: ₹{capacity_result.suggested_max_amount:,.0f}", "SUCCESS")
-            log(f"Final interest rate: {capacity_result.final_interest_rate_pct:.2f}%")
+            log(f"Final interest rate: {capacity_result.final_rate_pct:.2f}%")
         else:
             log(f"Bank CANNOT lend. {capacity_result.capacity_remarks}", "ERROR")
         

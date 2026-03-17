@@ -201,6 +201,9 @@ export default function NewAppraisal() {
   
   // Step 4: Documents
   const [files, setFiles] = useState({})
+  const [annualReports, setAnnualReports] = useState([
+    { id: 1, file: null, year: 'FY24', label: 'FY 2023-24 (Most Recent)' },
+  ])
   
   // Step 5: Qualitative Assessment
   const [activeTab, setActiveTab] = useState('factory')
@@ -343,6 +346,26 @@ export default function NewAppraisal() {
     setFiles((prev) => ({ ...prev, [field]: file }))
   }, [])
 
+  const addYear = () => {
+    const years = ['FY25', 'FY24', 'FY23', 'FY22', 'FY21', 'FY20', 'FY19']
+    const usedYears = annualReports.map((r) => r.year)
+    const nextYear = years.find((y) => !usedYears.includes(y)) || `FY${Date.now()}`
+    setAnnualReports((prev) => [
+      ...prev,
+      { id: Date.now(), file: null, year: nextYear, label: `${nextYear} Annual Report` },
+    ])
+  }
+
+  const removeYear = (id) => setAnnualReports((prev) => prev.filter((r) => r.id !== id))
+
+  const updateFile = (id, file) => {
+    setAnnualReports((prev) => prev.map((r) => (r.id === id ? { ...r, file } : r)))
+  }
+
+  const updateYear = (id, year) => {
+    setAnnualReports((prev) => prev.map((r) => (r.id === id ? { ...r, year } : r)))
+  }
+
   const handleQualitativeChange = (section, field, value) => {
     setQualitative(prev => ({
       ...prev,
@@ -380,41 +403,43 @@ export default function NewAppraisal() {
       return
     }
 
-    const uploadedFiles = Object.values(files).filter(Boolean)
-    if (uploadedFiles.length === 0) {
-      setError('Please upload at least one document before proceeding.')
+    const validAnnualReports = annualReports.filter((r) => r.file)
+    const otherDocuments = DOC_ZONES
+      .filter(({ field }) => field !== 'annual_report')
+      .map(({ field }) => ({ file: files[field], type: field }))
+      .filter((d) => !!d.file)
+
+    if (validAnnualReports.length === 0) {
+      setError('Please upload at least one annual report PDF before proceeding.')
       return
     }
 
     setLoading(true)
 
     try {
-      // Step 1: Upload and classify documents
       const fd = new FormData()
-      fd.append('application_id', applicationId)
-      
-      DOC_ZONES.forEach(({ field }) => {
-        if (files[field]) {
-          fd.append('files', files[field])
-        }
+      fd.append('company_name', entityForm.company_name)
+      fd.append('sector', entityForm.sector)
+      fd.append('loan_amount', loanForm.loan_amount)
+      fd.append('loan_type', loanForm.loan_type)
+
+      validAnnualReports.forEach((report) => {
+        fd.append('annual_reports', report.file)
+        fd.append('annual_report_years', report.year)
       })
 
-      // Also store qualitative inputs for later use
-      fd.append('qualitative_inputs', JSON.stringify(qualitative))
+      otherDocuments.forEach((doc) => {
+        fd.append('documents', doc.file)
+        fd.append('document_types', doc.type)
+      })
 
-      const { data } = await axios.post(`${API}/documents/upload-and-classify`, fd, {
+      const { data } = await axios.post(`${API}/appraisal/start`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
 
-      // Step 2: Navigate to classification review page with results
-      navigate(`/appraisal/${applicationId}/classify-review`, {
-        state: {
-          classificationData: data,
-          qualitativeInputs: qualitative,
-        }
-      })
+      navigate(`/appraisal/${data.job_id}/pipeline`)
     } catch (err) {
-      setError(getErrorMessage(err, 'Failed to upload and classify documents. Check backend connection.'))
+      setError(getErrorMessage(err, 'Failed to start appraisal. Check backend connection.'))
       setLoading(false)
     }
   }
@@ -846,7 +871,82 @@ export default function NewAppraisal() {
             )}
 
             <div className="grid grid-cols-2 gap-4">
-              {DOC_ZONES.map((meta, idx) => (
+              <div className="col-span-2" style={{ marginBottom: 8 }}>
+                <label style={{ color: '#D8EAF2', fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 12 }}>
+                  Annual Reports
+                  <span style={{ color: '#7A9BB5', fontWeight: 400, marginLeft: 8 }}>
+                    (Upload 1-5 years for trend analysis)
+                  </span>
+                </label>
+
+                {annualReports.map((report) => (
+                  <div
+                    key={report.id}
+                    style={{
+                      display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10,
+                      background: '#0F2640', borderRadius: 8, padding: '10px 14px',
+                      border: report.file ? '1px solid #00C2A8' : '1px solid #1E3A5F'
+                    }}
+                  >
+                    <select
+                      value={report.year}
+                      onChange={(e) => updateYear(report.id, e.target.value)}
+                      style={{
+                        background: '#0B1D35', color: 'white', border: '1px solid #1E3A5F',
+                        borderRadius: 6, padding: '6px 10px', fontSize: 13, width: 100
+                      }}
+                    >
+                      {['FY25', 'FY24', 'FY23', 'FY22', 'FY21', 'FY20', 'FY19'].map((y) => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+
+                    <label style={{ flex: 1, cursor: 'pointer' }}>
+                      <input
+                        type="file"
+                        accept=".pdf"
+                        style={{ display: 'none' }}
+                        onChange={(e) => updateFile(report.id, e.target.files?.[0])}
+                      />
+                      <div
+                        style={{
+                          padding: '8px 12px', borderRadius: 6, fontSize: 13,
+                          background: '#071528', border: '1px dashed #1E3A5F',
+                          color: report.file ? '#00C2A8' : '#7A9BB5'
+                        }}
+                      >
+                        {report.file ? `✓ ${report.file.name}` : '+ Click to upload PDF'}
+                      </div>
+                    </label>
+
+                    {annualReports.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeYear(report.id)}
+                        style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', fontSize: 18 }}
+                      >
+                        x
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {annualReports.length < 5 && (
+                  <button
+                    type="button"
+                    onClick={addYear}
+                    style={{
+                      background: 'none', border: '1px dashed #1E3A5F', borderRadius: 8,
+                      color: '#7A9BB5', padding: '8px 16px', cursor: 'pointer', fontSize: 13,
+                      width: '100%', marginTop: 4
+                    }}
+                  >
+                    + Add another year (up to {5 - annualReports.length} more)
+                  </button>
+                )}
+              </div>
+
+              {DOC_ZONES.filter((meta) => meta.field !== 'annual_report').map((meta, idx) => (
                 <div key={meta.field} className="animate-slide-up" style={{ animationDelay: `${idx * 50}ms` }}>
                   <DropZone
                     meta={meta}
@@ -862,17 +962,17 @@ export default function NewAppraisal() {
                 <Upload size={18} style={{ color: 'var(--accent)' }} />
                 <div>
                   <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>
-                    {Object.values(files).filter(Boolean).length} / {DOC_ZONES.length} files uploaded
+                    {annualReports.filter((r) => !!r.file).length + Object.values(files).filter(Boolean).length} files uploaded
                   </p>
                   <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
-                    {Object.values(files).filter(Boolean).length === 0 
+                    {annualReports.filter((r) => !!r.file).length + Object.values(files).filter(Boolean).length === 0 
                       ? 'Upload documents for better analysis accuracy'
                       : 'Engine will process all uploaded documents'
                     }
                   </p>
                 </div>
               </div>
-              {Object.values(files).filter(Boolean).length > 0 && (
+              {annualReports.filter((r) => !!r.file).length + Object.values(files).filter(Boolean).length > 0 && (
                 <div className="px-3 py-1.5 rounded-full font-mono text-xs font-semibold"
                      style={{ background: 'var(--accent)15', color: 'var(--accent)' }}>
                   Ready
